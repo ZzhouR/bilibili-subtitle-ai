@@ -85,6 +85,11 @@
   const observer = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
+      // 通知扩展页面（侧边栏等）：已切换视频，自动刷新字幕
+      try {
+        const info = parseVideoInfo();
+        chrome.runtime.sendMessage({ type: "VIDEO_CHANGED", bvid: info ? info.bvid : null }).catch(() => {});
+      } catch (_) { /* ignore */ }
       setTimeout(requestSubtitles, 1200); // 等新视频数据注入
     }
   });

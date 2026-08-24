@@ -142,6 +142,10 @@
     lastHighlight = idx;
     const rows = listEl.querySelectorAll(".bili-sub-ai-line");
     rows.forEach((el, i) => el.classList.toggle("active", i === idx));
+    // 通知侧边栏同步高亮/滚动（轨道索引 + 行索引）
+    try {
+      chrome.runtime.sendMessage({ type: "PLAYBACK_HIGHLIGHT", trackIndex: activeIndex, index: idx }).catch(() => {});
+    } catch (_) { /* ignore */ }
     if (idx >= 0) {
       const el = rows[idx];
       if (el) el.scrollIntoView({ block: "center", behavior: "auto" });

@@ -41,6 +41,8 @@
 | panel/popup → content | `GET_CURRENT_SUBTITLES` | – | `{ok, tracks[], activeIndex, info}` |
 | panel/popup → content | `SET_ACTIVE_TRACK` | `{index}` | `{ok}` |
 | panel → content | `SIDEPANEL_STATE` | `{open}` | `{ok}`（浮动面板隐藏/恢复） |
+| content → 扩展页 | `PLAYBACK_HIGHLIGHT` | `{trackIndex, index}` | –（侧边栏同步高亮/滚动） |
+| content → 扩展页 | `VIDEO_CHANGED` | `{bvid}` | –（侧边栏自动刷新字幕） |
 | panel → background | `AI_CHAT` | `{id, messages[], stream}` | 异步：`AI_STREAM` 广播 + 最终 `{ok,streamed}` |
 | background → 所有扩展页 | `AI_STREAM` | `{id, delta\|done\|error}` | – |
 | panel/popup → background | `AI_STOP` / `AI_TEST` / `PING` | `{id?}` / – / – | `{ok}` / `{ok,models}` / `{ok,version}` |
@@ -72,3 +74,4 @@
 | cid 缓存 | SW 内存 Map | 会话 | bvid→cid |
 | `bili-subtitle-ai-panel-split` | localStorage（视频页） | 永久 | 面板轨道选择 |
 | `bili-subtitle-ai-panel-split` | localStorage（侧边栏） | 永久 | 上下区域比例 |
+| `chatHistory` | chrome.storage.local | 永久（上限 100 条） | 对话历史（不含字幕知识库正文，按 bvid 关联） |

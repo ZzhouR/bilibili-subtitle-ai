@@ -8,53 +8,71 @@
 </head>
 <body>
 <header class="p-head">
-  <div class="p-title">📝 字幕 AI 助手</div>
+  <div class="p-head-row">
+    <div class="p-title">📝 字幕 AI 助手</div>
+    <button class="btn small" id="historyBtn">📚 历史</button>
+  </div>
   <div class="p-status" id="status">未检测到视频页</div>
 </header>
 
-<section class="p-tracks" id="trackBar" hidden>
-  <select id="trackSelect" title="选择字幕轨道"></select>
-  <button class="btn small" id="reloadBtn">刷新</button>
-</section>
+<div id="mainView">
+  <section class="p-tracks" id="trackBar" hidden>
+    <select id="trackSelect" title="选择字幕轨道"></select>
+    <button class="btn small" id="reloadBtn">刷新</button>
+  </section>
 
-<section class="p-subtitle">
-  <div class="p-sec-head">
-    <span>字幕列表</span>
-    <span class="p-count" id="lineCount"></span>
-    <span class="p-spacer"></span>
-    <button class="btn small" id="selAllBtn">全选</button>
-    <button class="btn small" id="selClearBtn">清空</button>
-  </div>
-  <div class="p-list" id="subList"></div>
-</section>
-
-<div class="p-resizer" id="subResizer" title="拖动调整字幕区高度"></div>
-
-<section class="p-chat">
-  <div class="p-sec-head">
-    <span>与 AI 对话</span>
-    <span class="p-spacer"></span>
-    <button class="btn small" id="ctxSelBtn">＋所选字幕</button>
-    <button class="btn small" id="ctxAllBtn">＋全文</button>
-  </div>
-  <div class="p-quick">
-    <button class="chip" data-prompt="请对以下视频字幕进行总结，输出结构清晰的中文摘要：">📋 总结</button>
-    <button class="chip" data-prompt="请提取以下视频字幕的要点，分点列出：">🎯 要点</button>
-    <button class="chip" data-prompt="请将以下视频字幕翻译为英文：">🌐 英译</button>
-  </div>
-  <div class="p-context" id="ctxBox" hidden>
-    <div class="p-context-head">已附加字幕上下文（点击清除）
-      <button class="btn small" id="ctxClearBtn">清除</button>
+  <section class="p-subtitle">
+    <div class="p-sec-head">
+      <span>字幕列表</span>
+      <span class="p-count" id="lineCount"></span>
+      <span class="p-spacer"></span>
+      <button class="btn small" id="selAllBtn">全选</button>
+      <button class="btn small" id="selClearBtn">清空</button>
     </div>
-    <pre id="ctxText"></pre>
+    <div class="p-list" id="subList"></div>
+  </section>
+
+  <div class="p-resizer" id="subResizer" title="拖动调整字幕区高度"></div>
+
+  <section class="p-chat">
+    <div class="p-sec-head">
+      <span>与 AI 对话</span>
+      <span class="p-spacer"></span>
+      <button class="btn small" id="ctxSelBtn">＋所选字幕</button>
+      <button class="btn small" id="ctxAllBtn">＋全文</button>
+    </div>
+    <div class="p-quick">
+      <button class="chip" data-prompt="请对以下视频字幕进行总结，输出结构清晰的中文摘要：">📋 总结</button>
+      <button class="chip" data-prompt="请提取以下视频字幕的要点，分点列出：">🎯 要点</button>
+      <button class="chip" data-prompt="请将以下视频字幕翻译为英文：">🌐 英译</button>
+    </div>
+    <div class="p-context" id="ctxBox" hidden>
+      <div class="p-context-head">已附加字幕上下文（点击清除）
+        <button class="btn small" id="ctxClearBtn">清除</button>
+      </div>
+      <pre id="ctxText"></pre>
+    </div>
+    <div class="p-messages" id="msgList"></div>
+    <form class="p-input" id="chatForm">
+      <textarea id="input" rows="2" placeholder="基于字幕向 AI 提问…（未附加上下文时自动附带当前字幕全文）"></textarea>
+      <button type="submit" id="sendBtn">发送</button>
+      <button type="button" class="btn" id="stopBtn" hidden>停止</button>
+    </form>
+  </section>
+</div>
+
+<div id="historyView" hidden>
+  <div class="p-sec-head">
+    <span>对话历史</span>
+    <span class="p-count" id="historyCount"></span>
+    <span class="p-spacer"></span>
+    <button class="btn small" id="newChatBtn">＋ 新对话</button>
   </div>
-  <div class="p-messages" id="msgList"></div>
-  <form class="p-input" id="chatForm">
-    <textarea id="input" rows="2" placeholder="基于字幕向 AI 提问…（可先勾选字幕行作为上下文）"></textarea>
-    <button type="submit" id="sendBtn">发送</button>
-    <button type="button" class="btn" id="stopBtn" hidden>停止</button>
-  </form>
-</section>
+  <div class="p-history-search">
+    <input type="text" id="historySearch" placeholder="搜索标题或对话内容…">
+  </div>
+  <div class="p-history-list" id="historyList"></div>
+</div>
 
 <script src="panel.js"></script>
 </body>

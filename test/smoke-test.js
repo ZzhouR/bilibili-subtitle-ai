@@ -80,7 +80,7 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.4.0", manifest.version, "0.4.0");
+eq("版本号为 0.5.0", manifest.version, "0.5.0");
 ok("权限含 storage/cookies/sidePanel", ["storage", "cookies", "sidePanel"].every(p => manifest.permissions.includes(p)));
 
 console.log("-- 关键链路存在性");
@@ -89,13 +89,15 @@ const bg = fs.readFileSync(path.join(ROOT, "background.js"), "utf8");
 const extractor = fs.readFileSync(path.join(ROOT, "content/extractor.js"), "utf8");
 ok("extractor 允许 cid 为空", extractor.includes("return { bvid, cid }"));
 ok("extractor 有自动重试", extractor.includes("setTimeout(requestSubtitles, 3000)"));
+ok("extractor 广播 VIDEO_CHANGED", extractor.includes("VIDEO_CHANGED"));
 const view = fs.readFileSync(path.join(ROOT, "content/subtitle-view.js"), "utf8");
-["GET_CURRENT_SUBTITLES", "SET_ACTIVE_TRACK", "scrollIntoView", "SIDEPANEL_STATE", "150000"].forEach(k => ok("view.js 包含 " + k, view.includes(k)));
+["GET_CURRENT_SUBTITLES", "SET_ACTIVE_TRACK", "scrollIntoView", "SIDEPANEL_STATE", "150000", "PLAYBACK_HIGHLIGHT"].forEach(k => ok("view.js 包含 " + k, view.includes(k)));
 const panel = fs.readFileSync(path.join(ROOT, "sidepanel/panel.js"), "utf8");
-["GET_CURRENT_SUBTITLES", "AI_STREAM", "AI_STOP", "SIDEPANEL_STATE", "subResizer", "--subtitle-h"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
+["GET_CURRENT_SUBTITLES", "AI_STREAM", "AI_STOP", "SIDEPANEL_STATE", "subResizer", "--subtitle-h", "PLAYBACK_HIGHLIGHT", "VIDEO_CHANGED", "chatHistory", "sendUserMessage", "【视频字幕知识库】", "historyBtn"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 
 const panelHtml = fs.readFileSync(path.join(ROOT, "sidepanel/panel.html"), "utf8");
 ok("panel.html 含拖拽分隔条", panelHtml.includes("p-resizer"));
+ok("panel.html 含历史视图", panelHtml.includes("historyView") && panelHtml.includes("historyBtn"));
 ["ARCHITECTURE.md", "DECISIONS.md", "CHANGELOG.md"].forEach(k => ok("docs/" + k + " 存在", fs.existsSync(path.join(ROOT, "docs", k))));
 
 console.log("\n结果: " + pass + " 通过, " + fail + " 失败");
