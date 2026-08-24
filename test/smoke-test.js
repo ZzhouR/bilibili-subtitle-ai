@@ -80,7 +80,7 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.3.0", manifest.version, "0.3.0");
+eq("版本号为 0.4.0", manifest.version, "0.4.0");
 ok("权限含 storage/cookies/sidePanel", ["storage", "cookies", "sidePanel"].every(p => manifest.permissions.includes(p)));
 
 console.log("-- 关键链路存在性");
