@@ -29,7 +29,8 @@
 | `background.js` | 唯一访问网络/密钥的模块；消息路由；缓存（字幕 30min、wbi 密钥 1d、cid 内存缓存） | API Key 永不进入页面上下文 |
 | `content/extractor.js` | 识别视频页 bvid/cid，请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析）；失败自动重试 2 次（3s 间隔） |
 | `content/subtitle-view.js` | 浮动字幕面板：轨道切换、播放同步滚动/高亮、点击跳转、悬浮字幕条、拖拽/折叠 | 依赖 `SUB_READY` 广播；响应 `SIDEPANEL_STATE` 隐藏自己 |
-| `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止） | 与浮动面板互斥显示（并入机制） |
+| `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库） | 与浮动面板互斥显示（并入机制） |
+| `history/` | 对话历史管理独立窗口：搜索/查看/重命名/删除/载入侧边栏续聊 | 与侧边栏经 `pendingOpenRecord` + 消息协作 |
 | `options/` | AI 服务配置，存 `chrome.storage.local` 的 `aiSettings` | 支持测试连接（GET /models） |
 | `popup/` | 显示当前视频字幕状态；打开侧边栏/设置 | 依赖 content 的 `GET_CURRENT_SUBTITLES` |
 
@@ -43,6 +44,7 @@
 | panel → content | `SIDEPANEL_STATE` | `{open}` | `{ok}`（浮动面板隐藏/恢复） |
 | content → 扩展页 | `PLAYBACK_HIGHLIGHT` | `{trackIndex, index}` | –（侧边栏同步高亮/滚动） |
 | content → 扩展页 | `VIDEO_CHANGED` | `{bvid}` | –（侧边栏自动刷新字幕） |
+| history 窗口 → 侧边栏 | `LOAD_HISTORY_TO_PANEL` | `{id}` | –（侧边栏载入该历史对话） |
 | panel → background | `AI_CHAT` | `{id, messages[], stream}` | 异步：`AI_STREAM` 广播 + 最终 `{ok,streamed}` |
 | background → 所有扩展页 | `AI_STREAM` | `{id, delta\|done\|error}` | – |
 | panel/popup → background | `AI_STOP` / `AI_TEST` / `PING` | `{id?}` / – / – | `{ok}` / `{ok,models}` / `{ok,version}` |
@@ -75,3 +77,4 @@
 | `bili-subtitle-ai-panel-split` | localStorage（视频页） | 永久 | 面板轨道选择 |
 | `bili-subtitle-ai-panel-split` | localStorage（侧边栏） | 永久 | 上下区域比例 |
 | `chatHistory` | chrome.storage.local | 永久（上限 100 条） | 对话历史（不含字幕知识库正文，按 bvid 关联） |
+| `pendingOpenRecord` | chrome.storage.local | 一次性 | 历史窗口请求侧边栏载入的对话 id |

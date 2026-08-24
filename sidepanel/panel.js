@@ -1,4 +1,5 @@
-// B站字幕 AI 助手 - 侧边栏：字幕浏览 + AI 对话（自动知识库 / 播放同步 / 历史 CRUD）
+// B站字幕 AI 助手 - 侧边栏：字幕浏览 + AI 对话（自动知识库 / 播放同步）
+// 对话历史：独立窗口 history/history.html 管理，此处仅提供入口按钮
 (() => {
   const $ = sel => document.querySelector(sel);
   const statusEl = $("#status");
@@ -9,25 +10,17 @@
   const msgList = $("#msgList");
   const chatForm = $("#chatForm");
   const input = $("#input");
-  const sendBtn = $("#sendBtn");
   const stopBtn = $("#stopBtn");
   const ctxBox = $("#ctxBox");
   const ctxText = $("#ctxText");
   const resizer = $("#subResizer");
-  const mainView = $("#mainView");
-  const historyView = $("#historyView");
-  const historyBtn = $("#historyBtn");
-  const historySearch = $("#historySearch");
-  const historyList = $("#historyList");
-  const historyCount = $("#historyCount");
 
   let tracks = [];
   let activeIndex = -1;
   let info = null;
-  const selected = new Set(); // 选中的字幕行下标
+  const selected = new Set();
   let streamSeq = 0;
   let currentStreamId = null;
-  let historyVisible = false;
 
   // ---------- 状态 ----------
   function setStatus(text, kind) {
@@ -113,7 +106,6 @@
     subList.appendChild(frag);
   }
 
-  // 播放同步：content 广播的高亮行
   function highlightSidebarIndex(trackIndex, idx) {
     if (trackIndex !== activeIndex) return;
     const rows = subList.querySelectorAll(".p-line");
@@ -162,7 +154,7 @@
     return div;
   }
 
-  // ---------- 历史存储（CRUD） ----------
+  // ---------- 历史存储 ----------
   const HISTORY_KEY = "chatHistory";
   const HISTORY_LIMIT = 100;
 
@@ -191,8 +183,8 @@
     await persistHistory(list);
   }
 
-  // ---------- AI 对话（自动知识库 + 流式 + 历史记录） ----------
-  const aiStreams = new Map(); // streamId -> {body, textEl, caretEl, fullText, saved}
+  // ---------- AI 对话 ----------
+  const aiStreams = new Map();
 
   function handleStream(m) {
     const s = aiStreams.get(m.id);
@@ -218,7 +210,6 @@
       s.textEl.textContent = aiText || s.fullText || "";
     }
     msgList.scrollTop = msgList.scrollHeight;
-    // 追加 AI 回复并保存历史（增/改）
     if (currentRecord) {
       if (!isErr && s.fullText) currentRecord.messages.push({ role: "ai", content: s.fullText });
       currentRecord.updatedAt = Date.now();
@@ -231,7 +222,6 @@
     const text = String(userText || "").trim();
     if (!text) { addMsg("sys", "请输入提问内容"); return; }
 
-    // 自动知识库：未手动附加上下文时，自动附带当前字幕全文
     let ctx = ctxText.textContent.trim();
     let autoCtx = false;
     if (!ctx) {
@@ -245,7 +235,6 @@
     if (ctx) messages.push({ role: "user", content: "【视频字幕知识库】\n" + ctx });
     messages.push({ role: "user", content: text });
 
-    // 历史记录（当前对话）
     if (!currentRecord) {
       currentRecord = {
         id: genId(),
@@ -297,79 +286,7 @@
 
   function showStop(show) { stopBtn.hidden = !show; }
 
-  // ---------- 历史视图（查/改/删） ----------
-  function fmtTime(ts) {
-    const d = new Date(ts);
-    const p = n => String(n).padStart(2, "0");
-    return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
-  }
-
-  async function renderHistoryList() {
-    const list = (await loadHistory()).slice().reverse();
-    const q = (historySearch.value || "").trim().toLowerCase();
-    const items = q
-      ? list.filter(r => (r.title || "").toLowerCase().includes(q) || (r.messages || []).some(m => (m.content || "").toLowerCase().includes(q)))
-      : list;
-    historyCount.textContent = list.length + " 条";
-    historyList.innerHTML = "";
-    if (!items.length) {
-      historyList.innerHTML = '<div class="p-empty">' + (q ? "无匹配记录" : "暂无对话记录，去聊一句吧") + "</div>";
-      return;
-    }
-    const frag = document.createDocumentFragment();
-    items.forEach(rec => {
-      const item = document.createElement("div");
-      item.className = "h-item";
-      const main = document.createElement("div");
-      main.className = "h-main";
-      main.title = "点击载入此对话";
-      const t = document.createElement("div");
-      t.className = "h-title";
-      t.textContent = rec.title || "未命名对话";
-      const meta = document.createElement("div");
-      meta.className = "h-meta";
-      meta.textContent = (rec.bvid || "未知视频") + " · " + (rec.messages ? rec.messages.length : 0) + " 条消息 · " + fmtTime(rec.updatedAt || rec.createdAt);
-      main.appendChild(t); main.appendChild(meta);
-      const ops = document.createElement("div");
-      ops.className = "h-ops";
-      const ren = document.createElement("button");
-      ren.className = "btn small"; ren.dataset.act = "rename"; ren.textContent = "✎"; ren.title = "重命名";
-      const del = document.createElement("button");
-      del.className = "btn small"; del.dataset.act = "del"; del.textContent = "🗑"; del.title = "删除";
-      ops.appendChild(ren); ops.appendChild(del);
-      item.appendChild(main); item.appendChild(ops);
-      item.addEventListener("click", e => {
-        const op = e.target.closest("[data-act]");
-        if (op && op.dataset.act === "rename") {
-          const name = prompt("重命名对话", rec.title || "");
-          if (name != null) {
-            rec.title = name.trim() || rec.title;
-            persistHistoryItem(rec);
-            renderHistoryList();
-          }
-        } else if (op && op.dataset.act === "del") {
-          if (confirm("删除这条对话记录？")) {
-            const remain = list.filter(r => r.id !== rec.id);
-            persistHistory(remain);
-            if (currentRecord && currentRecord.id === rec.id) currentRecord = null;
-            renderHistoryList();
-          }
-        } else {
-          openRecord(rec.id);
-        }
-      });
-      frag.appendChild(item);
-    });
-    historyList.appendChild(frag);
-  }
-
-  async function persistHistoryItem(rec) {
-    const all = await loadHistory();
-    const idx = all.findIndex(r => r.id === rec.id);
-    if (idx >= 0) all[idx] = Object.assign({}, all[idx], rec);
-    await persistHistory(all);
-  }
-
+  // ---------- 历史载入（来自独立历史窗口） ----------
   async function openRecord(id) {
     const list = await loadHistory();
     const rec = list.find(r => r.id === id);
@@ -389,17 +306,29 @@
       ? (sameVideo ? "已附带字幕知识库（当前视频）" : "此对话附带其他视频的字幕知识库")
       : "历史对话（未附带字幕知识库）");
     (currentRecord.messages || []).forEach(m => addMsg(m.role, m.content));
-    showHistory(false);
     setStatus(sameVideo ? "已载入历史对话" : "已载入历史对话（字幕与当前视频不一致）", sameVideo ? "ok" : "err");
   }
 
-  function showHistory(show) {
-    historyVisible = !!show;
-    mainView.hidden = historyVisible;
-    historyView.hidden = !historyVisible;
-    historyBtn.textContent = historyVisible ? "◀ 对话" : "📚 历史";
-    historyBtn.title = historyVisible ? "返回对话" : "查看对话历史";
-    if (historyVisible) renderHistoryList();
+  async function checkPendingOpenRecord() {
+    try {
+      const store = await chrome.storage.local.get("pendingOpenRecord");
+      if (store.pendingOpenRecord) {
+        await chrome.storage.local.remove("pendingOpenRecord");
+        await openRecord(store.pendingOpenRecord);
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  // ---------- 历史入口（独立窗口） ----------
+  function openHistoryWindow() {
+    const url = chrome.runtime.getURL("history/history.html");
+    if (chrome.windows && chrome.windows.create) {
+      chrome.windows.create({ url, type: "popup", width: 820, height: 640 }).catch(() => {
+        chrome.tabs.create({ url });
+      });
+    } else {
+      chrome.tabs.create({ url });
+    }
   }
 
   // ---------- 全局消息监听 ----------
@@ -407,8 +336,8 @@
     if (!msg || typeof msg.type !== "string") return;
     if (msg.type === "AI_STREAM") handleStream(msg);
     else if (msg.type === "PLAYBACK_HIGHLIGHT") highlightSidebarIndex(msg.trackIndex, msg.index);
+    else if (msg.type === "LOAD_HISTORY_TO_PANEL") openRecord(msg.id);
     else if (msg.type === "VIDEO_CHANGED") {
-      // 打开新视频：自动刷新字幕，清空勾选与手动上下文（保留当前对话与历史）
       selected.clear();
       setContext("");
       loadSubtitles();
@@ -458,14 +387,12 @@
     }
   });
 
-  historyBtn.addEventListener("click", () => showHistory(!historyVisible));
+  $("#historyBtn").addEventListener("click", openHistoryWindow);
   $("#newChatBtn").addEventListener("click", () => {
-    showHistory(false);
     currentRecord = null;
     msgList.innerHTML = "";
     setStatus("新对话（发送提问时会自动附带当前字幕）", "ok");
   });
-  historySearch.addEventListener("input", renderHistoryList);
 
   // ---------- 侧边栏状态通知 ----------
   async function notifySidePanelState(open) {
@@ -475,16 +402,16 @@
       if (tab && tab.id != null) {
         await chrome.tabs.sendMessage(tab.id, { type: "SIDEPANEL_STATE", open: !!open });
       }
-    } catch (_) { /* 视频页未就绪时忽略 */ }
+    } catch (_) { /* ignore */ }
   }
   notifySidePanelState(true);
-  setInterval(() => notifySidePanelState(true), 30000); // 心跳
+  setInterval(() => notifySidePanelState(true), 30000);
   document.addEventListener("visibilitychange", () => {
     notifySidePanelState(document.visibilityState === "visible");
   });
   window.addEventListener("pagehide", () => notifySidePanelState(false));
 
-  // ---------- 字幕区高度拖拽（上下区域可调节） ----------
+  // ---------- 字幕区高度拖拽 ----------
   const SPLIT_KEY = "bili-subtitle-ai-panel-split";
   const savedSplit = Number(localStorage.getItem(SPLIT_KEY));
   if (savedSplit) {
@@ -514,6 +441,6 @@
     document.addEventListener("mouseup", onUp);
   });
 
-  // 初始加载
-  loadSubtitles();
+  // 初始加载 + 检查历史窗口是否请求载入对话
+  loadSubtitles().then(() => { if (info) checkPendingOpenRecord(); });
 })();

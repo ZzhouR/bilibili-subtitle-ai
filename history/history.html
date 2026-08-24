@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="history.css">
+<title>对话历史</title>
+</head>
+<body>
+<header class="hh-head">
+  <div class="hh-title">📚 对话历史</div>
+  <input type="text" id="search" placeholder="搜索标题或对话内容…">
+  <button class="btn" id="refreshBtn">刷新</button>
+  <button class="btn primary" id="backBtn">← 返回侧边栏</button>
+</header>
+
+<div class="hh-body">
+  <aside class="hh-list" id="listWrap">
+    <div class="hh-list-head">
+      <span>记录</span>
+      <span class="hh-count" id="count"></span>
+    </div>
+    <div class="hh-list" id="list"></div>
+  </aside>
+
+  <main class="hh-detail" id="detail">
+    <div class="hh-empty" id="detailEmpty">
+      <div class="hh-empty-title">选择左侧记录查看对话</div>
+      <div class="hh-empty-sub">支持：搜索 / 重命名 / 删除 / 载入侧边栏继续对话</div>
+    </div>
+    <div id="detailView" hidden>
+      <div class="hh-detail-head">
+        <div class="hh-detail-info">
+          <div class="hh-detail-title" id="dTitle"></div>
+          <div class="hh-detail-meta" id="dMeta"></div>
+        </div>
+        <div class="hh-detail-ops">
+          <button class="btn primary" id="continueBtn">💬 在侧边栏继续</button>
+          <button class="btn" id="renameBtn">✎ 重命名</button>
+          <button class="btn" id="delBtn">🗑 删除</button>
+        </div>
+      </div>
+      <div class="hh-msgs" id="msgs"></div>
+    </div>
+  </main>
+</div>
+
+<script src="history.js"></script>
+</body>
+</html>

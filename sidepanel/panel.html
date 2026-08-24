@@ -10,7 +10,10 @@
 <header class="p-head">
   <div class="p-head-row">
     <div class="p-title">📝 字幕 AI 助手</div>
-    <button class="btn small" id="historyBtn">📚 历史</button>
+    <div class="p-head-btns">
+      <button class="btn small" id="newChatBtn">＋ 新对话</button>
+      <button class="btn small" id="historyBtn">📚 历史</button>
+    </div>
   </div>
   <div class="p-status" id="status">未检测到视频页</div>
 </header>
@@ -59,19 +62,6 @@
       <button type="button" class="btn" id="stopBtn" hidden>停止</button>
     </form>
   </section>
-</div>
-
-<div id="historyView" hidden>
-  <div class="p-sec-head">
-    <span>对话历史</span>
-    <span class="p-count" id="historyCount"></span>
-    <span class="p-spacer"></span>
-    <button class="btn small" id="newChatBtn">＋ 新对话</button>
-  </div>
-  <div class="p-history-search">
-    <input type="text" id="historySearch" placeholder="搜索标题或对话内容…">
-  </div>
-  <div class="p-history-list" id="historyList"></div>
 </div>
 
 <script src="panel.js"></script>
