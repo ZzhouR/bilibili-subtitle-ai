@@ -45,6 +45,8 @@
 | content → 扩展页 | `PLAYBACK_HIGHLIGHT` | `{trackIndex, index}` | –（侧边栏同步高亮/滚动） |
 | content → 扩展页 | `VIDEO_CHANGED` | `{bvid}` | –（侧边栏自动刷新字幕） |
 | history 窗口 → 侧边栏 | `LOAD_HISTORY_TO_PANEL` | `{id}` | –（侧边栏载入该历史对话） |
+| content → background → 扩展页 | `SUBTITLES_READY` | `{bvid}` | –（新字幕就绪，侧边栏拉取最新字幕） |
+| content → background → 扩展页 | `SUBTITLES_ERROR` | `{error}` | –（新字幕获取失败，侧边栏刷新状态） |
 | panel → background | `AI_CHAT` | `{id, messages[], stream}` | 异步：`AI_STREAM` 广播 + 最终 `{ok,streamed}` |
 | background → 所有扩展页 | `AI_STREAM` | `{id, delta\|done\|error}` | – |
 | panel/popup → background | `AI_STOP` / `AI_TEST` / `PING` | `{id?}` / – / – | `{ok}` / `{ok,models}` / `{ok,version}` |

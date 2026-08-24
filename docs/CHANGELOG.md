@@ -1,5 +1,12 @@
 # 变更日志（CHANGELOG）
 
+## [0.7.1] - 2025
+### 修复（SPA 切换视频字幕不更新）
+- **URL 检测四通道**：MutationObserver + popstate + history.pushState/replaceState 包装 + 800ms 轮询兜底，覆盖 B 站分P切换（URL 仅改 ?p=N）与所有 SPA 跳转。
+- **分P视频 cid 解析**：页面同时上报 `?p=` 分P编号，后台经 view 接口 `pages` 按 p 匹配 cid（不再错误使用主版本字幕）。
+- **时序修复**：切换后新字幕加载完成时 content 再发 `SUBTITLES_READY`（经 background 转发），侧边栏此时才拉取最新字幕；切换瞬间清空旧列表防串台，4 秒兜底刷新。
+- `VIDEO_CHANGED` 消息补充 `p` 字段。
+
 ## [0.7.0] - 2025
 ### 变更
 - **完全移除视频页浮动字幕面板**：`subtitle-view.js` 精简为无 UI 播放同步服务（广播 `PLAYBACK_HIGHLIGHT`，响应 `JUMP_TO_TIME`）；字幕展示/同步滚动/当前句条/点击跳转全部在侧边栏完成。新增"当前句"显示条（跟随播放，点击跳转）。

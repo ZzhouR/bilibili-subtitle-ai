@@ -27,6 +27,7 @@
   const selected = new Set();
   let streamSeq = 0;
   let currentStreamId = null;
+  let videoSwitchTimer = null; // 切换后未收到就绪通知时的兜底刷新
 
   // ---------- 状态 ----------
   function setStatus(text, kind) {
@@ -383,7 +384,15 @@
     else if (msg.type === "VIDEO_CHANGED") {
       selected.clear();
       setContext("");
-      loadSubtitles();
+      setStatus("检测到视频切换，正在加载新字幕…");
+      subList.innerHTML = '<div class="p-empty">视频切换中，字幕加载…</div>';
+      lineCount.textContent = "";
+      clearTimeout(videoSwitchTimer);
+      videoSwitchTimer = setTimeout(loadSubtitles, 4000); // 兜底刷新
+    }
+    else if (msg.type === "SUBTITLES_READY" || msg.type === "SUBTITLES_ERROR") {
+      clearTimeout(videoSwitchTimer);
+      loadSubtitles(); // 新字幕已就绪/失败，拉取最新状态
     }
   });
 

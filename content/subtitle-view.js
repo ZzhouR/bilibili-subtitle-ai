@@ -71,11 +71,16 @@
     const d = e.detail || {};
     if (d.type === "SUB_READY") {
       tracks = d.tracks || [];
-      currentInfo = { bvid: d.bvid, cid: d.cid || null };
+      currentInfo = { bvid: d.bvid, cid: d.cid || null, p: d.p || null };
       lastVolley = "";
       broadcastHighlight();
-    } else if (d.type === "SUB_STATUS") {
+    } else if (d.type === "VIDEO_CHANGED" || d.type === "SUB_STATUS") {
+      // 切换视频：立即清空旧字幕，避免侧边栏拉到旧数据；新数据由 SUBTITLES_READY 通知
       tracks = [];
+      lastVolley = "";
+      try {
+        chrome.runtime.sendMessage({ type: "PLAYBACK_HIGHLIGHT", indexes: [] }).catch(() => {});
+      } catch (_) { /* ignore */ }
     }
   });
 

@@ -82,24 +82,39 @@ async function getWbiKeys(cookieHeader) {
 }
 
 // ---------- 视频信息 / 字幕提取 ----------
-const cidCache = new Map(); // bvid -> cid（内存缓存 30 分钟）
-async function resolveCid(bvid, cookieHeader) {
-  const cachedCid = cidCache.get(bvid);
+const cidCache = new Map(); // bvid:p -> cid（内存缓存）
+// 解析 cid：优先 view 接口的 pages 按分P编号 p 匹配；无 p 用主 cid；再回退 pagelist
+async function resolveCid(bvid, p, cookieHeader) {
+  const cacheKeyCid = (p ? bvid + ":" + p : bvid);
+  const cachedCid = cidCache.get(cacheKeyCid);
   if (cachedCid) return cachedCid;
+
   const url1 = "https://api.bilibili.com/x/web-interface/view?bvid=" + encodeURIComponent(bvid);
   const res1 = await fetchWithRetry(url1, { headers: { Cookie: cookieHeader || "" } });
   const json1 = await res1.json();
-  if (json1.code === 0 && json1.data && json1.data.cid) {
-    cidCache.set(bvid, json1.data.cid);
-    return json1.data.cid;
+  if (json1.code === 0 && json1.data) {
+    let cid = null;
+    if (p != null && Array.isArray(json1.data.pages)) {
+      const target = json1.data.pages.find(pg => Number(pg.page) === Number(p));
+      if (target && target.cid) cid = target.cid;
+    }
+    if (!cid && json1.data.cid) cid = json1.data.cid;
+    if (cid) {
+      cidCache.set(cacheKeyCid, cid);
+      return cid;
+    }
   }
 
   const url2 = "https://api.bilibili.com/x/player/pagelist?bvid=" + encodeURIComponent(bvid);
   const res2 = await fetchWithRetry(url2, { headers: { Cookie: cookieHeader || "" } });
   const json2 = await res2.json();
-  if (json2.code === 0 && json2.data && json2.data[0] && json2.data[0].cid) {
-    cidCache.set(bvid, json2.data[0].cid);
-    return json2.data[0].cid;
+  if (json2.code === 0) {
+    const idx = p != null ? Number(p) - 1 : 0;
+    const page = json2.data && (json2.data[idx] || json2.data[0]);
+    if (page && page.cid) {
+      cidCache.set(cacheKeyCid, page.cid);
+      return page.cid;
+    }
   }
 
   throw new Error("无法获取视频 cid（view=" + json1.code + " pagelist=" + json2.code + "）");
@@ -120,9 +135,9 @@ function pickTracks(json) {
     .sort((a, b) => score(a) - score(b));
 }
 
-async function fetchSubtitleList(bvid, cid) {
+async function fetchSubtitleList(bvid, cid, p) {
   const cookieHeader = await getBiliCookieHeader();
-  if (!cid) cid = await resolveCid(bvid, cookieHeader);
+  if (!cid) cid = await resolveCid(bvid, p, cookieHeader);
 
   // 1) 首选：wbi 签名接口
   let lastErr = "";
@@ -176,12 +191,12 @@ async function handleGetSubtitles(msg) {
   }
 
   try {
-    const list = await fetchSubtitleList(bvid, cidNum);
+    const list = await fetchSubtitleList(bvid, cidNum, msg.p);
     const cookieHeader = await getBiliCookieHeader();
     const results = await Promise.all(list.map(t => fetchSubtitleTrack(t, cookieHeader, bvid)));
     const tracks = results.filter(Boolean);
     if (cidNum) setCache(bvid, cidNum, tracks);
-    return { ok: true, fromCache: false, tracks, cid: cidNum };
+    return { ok: true, fromCache: false, tracks, cid: cidNum, p: msg.p || null };
   } catch (e) {
     return { ok: false, error: (e && e.message) ? e.message : String(e) };
   }
@@ -315,7 +330,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return await handleGetSubtitles(msg);
       case "VIDEO_CHANGED":
         // 统一转发：content → background → 所有扩展页面（侧边栏自动刷新字幕）
-        chrome.runtime.sendMessage({ type: "VIDEO_CHANGED", bvid: msg.bvid || null }).catch(() => {});
+        chrome.runtime.sendMessage({ type: "VIDEO_CHANGED", bvid: msg.bvid || null, p: msg.p || null }).catch(() => {});
+        return { ok: true };
+      case "SUBTITLES_READY":
+        // 新字幕已就绪：通知侧边栏重新拉取（解决“切换后仍显示旧字幕”的时序问题）
+        chrome.runtime.sendMessage({ type: "SUBTITLES_READY", bvid: msg.bvid || null }).catch(() => {});
+        return { ok: true };
+      case "SUBTITLES_ERROR":
+        chrome.runtime.sendMessage({ type: "SUBTITLES_ERROR", error: msg.error || "字幕获取失败" }).catch(() => {});
         return { ok: true };
       case "AI_CHAT":
         return await handleAiChat(msg);
