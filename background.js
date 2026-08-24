@@ -1,0 +1,326 @@
+// B站字幕 AI 助手 - Service Worker
+// 职责：字幕接口代理（wbi 签名 + 登录态 + 缓存）、AI 请求代理（流式 + 可中断）、设置持久化
+importScripts("lib/wbi.js");
+
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+// ---------- 基础工具 ----------
+async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// 通过 chrome.cookies 读取 bilibili 域下所有 cookie，组装 Cookie 头
+async function getBiliCookieHeader() {
+  try {
+    const cookies = await chrome.cookies.getAll({ domain: ".bilibili.com" });
+    if (!cookies || !cookies.length) return null;
+    return cookies.map(c => c.name + "=" + c.value).join("; ");
+  } catch (e) {
+    console.warn("[bg] read cookies failed:", e);
+    return null;
+  }
+}
+
+// 统一带重试的 fetch（B站接口偶发风控/超时）
+async function fetchWithRetry(url, options = {}, retries = 2) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": UA,
+          "Referer": "https://www.bilibili.com/",
+          ...(options.headers || {})
+        },
+        ...options
+      });
+      if (res.status === 412 || res.status === 429) {
+        await sleep(500 * (i + 1));
+        lastErr = new Error("HTTP " + res.status + " 风控/限流");
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      await sleep(400 * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
+// ---------- 字幕缓存 ----------
+const subtitleCache = new Map();
+const CACHE_TTL = 30 * 60 * 1000;
+function cacheKey(bvid, cid) { return bvid + ":" + cid; }
+function getCache(bvid, cid) {
+  const item = subtitleCache.get(cacheKey(bvid, cid));
+  if (item && Date.now() - item.fetchedAt < CACHE_TTL) return item.tracks;
+  return null;
+}
+function setCache(bvid, cid, tracks) {
+  subtitleCache.set(cacheKey(bvid, cid), { tracks, fetchedAt: Date.now() });
+}
+
+// ---------- wbi 密钥（缓存 1 天） ----------
+async function getWbiKeys(cookieHeader) {
+  const store = await chrome.storage.local.get("wbiKeys");
+  if (store.wbiKeys && Date.now() - store.wbiKeys.fetchedAt < 86400000) {
+    return { imgKey: store.wbiKeys.imgKey, subKey: store.wbiKeys.subKey };
+  }
+  const res = await fetchWithRetry("https://api.bilibili.com/x/web-interface/nav", {
+    headers: { Cookie: cookieHeader || "" }
+  });
+  const json = await res.json();
+  const wbi = json && json.data && json.data.wbi_img;
+  if (!wbi || !wbi.img_url || !wbi.sub_url) {
+    throw new Error("获取 wbi 密钥失败（nav 接口 code=" + (json && json.code) + "）");
+  }
+  const keys = {
+    imgKey: BiliLib.keyFromUrl(wbi.img_url),
+    subKey: BiliLib.keyFromUrl(wbi.sub_url)
+  };
+  await chrome.storage.local.set({ wbiKeys: { ...keys, fetchedAt: Date.now() } });
+  return keys;
+}
+
+// ---------- 视频信息 / 字幕提取 ----------
+const cidCache = new Map(); // bvid -> cid（内存缓存 30 分钟）
+async function resolveCid(bvid, cookieHeader) {
+  const cachedCid = cidCache.get(bvid);
+  if (cachedCid) return cachedCid;
+  const url1 = "https://api.bilibili.com/x/web-interface/view?bvid=" + encodeURIComponent(bvid);
+  const res1 = await fetchWithRetry(url1, { headers: { Cookie: cookieHeader || "" } });
+  const json1 = await res1.json();
+  if (json1.code === 0 && json1.data && json1.data.cid) {
+    cidCache.set(bvid, json1.data.cid);
+    return json1.data.cid;
+  }
+
+  const url2 = "https://api.bilibili.com/x/player/pagelist?bvid=" + encodeURIComponent(bvid);
+  const res2 = await fetchWithRetry(url2, { headers: { Cookie: cookieHeader || "" } });
+  const json2 = await res2.json();
+  if (json2.code === 0 && json2.data && json2.data[0] && json2.data[0].cid) {
+    cidCache.set(bvid, json2.data[0].cid);
+    return json2.data[0].cid;
+  }
+
+  throw new Error("无法获取视频 cid（view=" + json1.code + " pagelist=" + json2.code + "）");
+}
+
+// 从播放器接口响应中提取字幕轨道列表（按中文优先排序）
+function pickTracks(json) {
+  const subtitle = json.data && json.data.subtitle;
+  const tracks = (subtitle && subtitle.subtitles) || [];
+  const score = t => {
+    const lan = (t.lan || "").toLowerCase();
+    if (lan.includes("zh-cn")) return 0;
+    if (lan.includes("ai-zh")) return 1;
+    return 2;
+  };
+  return tracks
+    .map(t => ({ lan: t.lan, lan_doc: t.lan_doc, subtitle_url: t.subtitle_url }))
+    .sort((a, b) => score(a) - score(b));
+}
+
+async function fetchSubtitleList(bvid, cid) {
+  const cookieHeader = await getBiliCookieHeader();
+  if (!cid) cid = await resolveCid(bvid, cookieHeader);
+
+  // 1) 首选：wbi 签名接口
+  let lastErr = "";
+  try {
+    const keys = await getWbiKeys(cookieHeader);
+    const signed = BiliLib.encWbi({ bvid, cid }, keys.imgKey, keys.subKey);
+    const api = "https://api.bilibili.com/x/player/wbi/v2?" + signed;
+    const res = await fetchWithRetry(api, { headers: { Cookie: cookieHeader || "" } });
+    const json = await res.json();
+    if (json.code === 0) return pickTracks(json);
+    lastErr = "wbi/v2 code=" + json.code + " " + (json.message || "");
+  } catch (e) {
+    lastErr = "wbi/v2 " + (e && e.message ? e.message : String(e));
+  }
+
+  // 2) 回退：老接口 x/player/v2（无需签名）
+  try {
+    const api = "https://api.bilibili.com/x/player/v2?bvid=" + encodeURIComponent(bvid) + "&cid=" + encodeURIComponent(cid);
+    const res = await fetchWithRetry(api, { headers: { Cookie: cookieHeader || "" } });
+    const json = await res.json();
+    if (json.code === 0) return pickTracks(json);
+    lastErr += "；v2 code=" + json.code + " " + (json.message || "");
+  } catch (e) {
+    lastErr += "；v2 " + (e && e.message ? e.message : String(e));
+  }
+  throw new Error("字幕列表获取失败：" + lastErr);
+}
+
+async function fetchSubtitleTrack(track, cookieHeader, bvid) {
+  let url = track.subtitle_url || track.url;
+  if (!url) return null;
+  if (url.startsWith("//")) url = "https:" + url;
+  const res = await fetchWithRetry(url, {
+    headers: { Cookie: cookieHeader || "", Referer: "https://www.bilibili.com/video/" + (bvid || "") }
+  });
+  if (!res.ok) return null;
+  const json = await res.json();
+  const lines = BiliLib.normalizeBody(json.body);
+  return { lan: track.lan || "", lan_doc: track.lan_doc || track.label || "", url, lines };
+}
+
+async function handleGetSubtitles(msg) {
+  const { bvid, cid } = msg;
+  if (!bvid) return { ok: false, error: "缺少 bvid" };
+  const cidNum = cid ? Number(cid) : null;
+  const cacheKeyStr = cidNum ? cacheKey(bvid, cidNum) : null;
+
+  if (cacheKeyStr) {
+    const cached = getCache(bvid, cidNum);
+    if (cached) return { ok: true, fromCache: true, tracks: cached, cid: cidNum };
+  }
+
+  try {
+    const list = await fetchSubtitleList(bvid, cidNum);
+    const cookieHeader = await getBiliCookieHeader();
+    const results = await Promise.all(list.map(t => fetchSubtitleTrack(t, cookieHeader, bvid)));
+    const tracks = results.filter(Boolean);
+    if (cidNum) setCache(bvid, cidNum, tracks);
+    return { ok: true, fromCache: false, tracks, cid: cidNum };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  }
+}
+
+// ---------- AI 配置与请求 ----------
+const DEFAULT_SETTINGS = {
+  baseUrl: "https://api.deepseek.com",
+  apiKey: "",
+  model: "deepseek-chat",
+  temperature: 0.7,
+  systemPrompt: "你是专业的视频内容分析助手。你只基于用户提供的视频字幕进行总结、提炼、翻译与问答。回答使用与问题相同的语言，表达简洁、结构清晰。"
+};
+
+async function getSettings() {
+  const store = await chrome.storage.local.get("aiSettings");
+  return Object.assign({}, DEFAULT_SETTINGS, store.aiSettings || {});
+}
+
+const activeStreams = new Map(); // streamId -> AbortController
+
+async function handleAiChat(msg) {
+  const settings = await getSettings();
+  if (!settings.apiKey) return { ok: false, error: "未配置 API Key，请先在设置页填写" };
+
+  const baseUrl = (settings.baseUrl || "").replace(/\/+$/, "");
+  const url = baseUrl + "/chat/completions";
+  const controller = new AbortController();
+  const streamId = msg.id;
+  if (streamId) activeStreams.set(streamId, controller);
+
+  const payload = {
+    model: settings.model || DEFAULT_SETTINGS.model,
+    messages: [
+      { role: "system", content: settings.systemPrompt || DEFAULT_SETTINGS.systemPrompt },
+      ...(msg.messages || [])
+    ],
+    temperature: Number(settings.temperature) || 0.7,
+    stream: msg.stream !== false
+  };
+
+  const emit = (data) => {
+    if (!streamId) return;
+    chrome.runtime.sendMessage(Object.assign({ type: "AI_STREAM", id: streamId }, data)).catch(() => {});
+  };
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + settings.apiKey
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, error: "AI 接口 HTTP " + res.status + ": " + text.slice(0, 300) };
+    }
+    if (!payload.stream) {
+      const json = await res.json();
+      const content = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
+      return { ok: true, content: content || "" };
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n");
+      buffer = parts.pop();
+      for (const line of parts) {
+        const l = line.trim();
+        if (!l.startsWith("data:")) continue;
+        const data = l.slice(5).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const j = JSON.parse(data);
+          const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+          if (delta) emit({ delta });
+        } catch (_) { /* 忽略不完整块 */ }
+      }
+    }
+    emit({ done: true });
+    return { ok: true, streamed: true };
+  } catch (e) {
+    if (e && e.name === "AbortError") {
+      emit({ error: "已中断" });
+      return { ok: false, error: "已中断" };
+    }
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  } finally {
+    if (streamId) activeStreams.delete(streamId);
+  }
+}
+
+async function handleAiTest() {
+  const settings = await getSettings();
+  if (!settings.apiKey) return { ok: false, error: "未配置 API Key" };
+  const baseUrl = (settings.baseUrl || "").replace(/\/+$/, "");
+  try {
+    const res = await fetch(baseUrl + "/models", {
+      headers: { "Authorization": "Bearer " + settings.apiKey }
+    });
+    if (!res.ok) return { ok: false, error: "HTTP " + res.status + "，请检查 Base URL 与 Key" };
+    const json = await res.json();
+    const models = (json.data || []).map(m => m.id);
+    return { ok: true, models };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  }
+}
+
+// ---------- 消息路由 ----------
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || typeof msg.type !== "string") return;
+  (async () => {
+    switch (msg.type) {
+      case "PING":
+        return { ok: true, version: chrome.runtime.getManifest().version };
+      case "GET_SUBTITLES":
+        return await handleGetSubtitles(msg);
+      case "AI_CHAT":
+        return await handleAiChat(msg);
+      case "AI_STOP": {
+        const c = activeStreams.get(msg.id);
+        if (c) { try { c.abort(); } catch (_) {} }
+        return { ok: true };
+      }
+      case "AI_TEST":
+        return await handleAiTest();
+      default:
+        return { ok: false, error: "未知消息类型: " + msg.type };
+    }
+  })().then(sendResponse).catch(err => {
+    sendResponse({ ok: false, error: err && err.message ? err.message : String(err) });
+  });
+  return true; // 异步响应
+});

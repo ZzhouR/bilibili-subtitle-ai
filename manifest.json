@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "B站字幕 AI 助手",
+  "version": "0.3.0",
+  "description": "提取 B 站视频字幕：字幕随播放同步滚动高亮，并支持基于字幕与 AI 对话（总结/翻译/提问）。",
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "cookies",
+    "sidePanel",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.bilibili.com/*",
+    "https://*.bilivideo.com/*",
+    "https://api.deepseek.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/list/*"
+      ],
+      "js": [
+        "content/extractor.js",
+        "content/subtitle-view.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
+  },
+  "options_page": "options/options.html"
+}

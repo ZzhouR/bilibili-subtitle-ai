@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B站字幕 AI 助手 - 设置</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font: 14px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif; background: #f1f2f3; color: #18191c; min-height: 100vh; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 32px 20px 64px; }
+h1 { font-size: 20px; margin-bottom: 4px; color: #18191c; }
+h1::before { content: "⚙️ "; }
+.sub { color: #9499a0; margin-bottom: 24px; font-size: 13px; }
+.card { background: #fff; border: 1px solid #e3e5e7; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.04); }
+.card h2 { font-size: 15px; margin-bottom: 14px; color: #fb7299; }
+label { display: block; font-size: 13px; color: #61666d; margin: 12px 0 6px; }
+input[type=text], input[type=password], input[type=number], select, textarea {
+  width: 100%; background: #fff; color: #18191c; border: 1px solid #e3e5e7;
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none;
+  transition: border-color .15s;
+}
+input:focus, select:focus, textarea:focus { border-color: #00a1d6; }
+textarea { resize: vertical; min-height: 80px; }
+.hint { color: #9499a0; font-size: 12px; margin-top: 4px; }
+.row { display: flex; gap: 12px; }
+.row > div { flex: 1; }
+.actions { display: flex; gap: 10px; margin-top: 20px; }
+button {
+  background: #fb7299; color: #fff; border: none; border-radius: 8px;
+  padding: 9px 20px; font-size: 14px; cursor: pointer; transition: filter .15s;
+}
+button:hover { filter: brightness(1.06); }
+button.secondary { background: #fff; color: #61666d; border: 1px solid #e3e5e7; }
+button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
+#status { margin-top: 12px; font-size: 13px; min-height: 20px; }
+#status.ok { color: #00ae66; }
+#status.err { color: #fa5a5a; }
+.kv { font-size: 12.5px; color: #9499a0; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>B站字幕 AI 助手设置</h1>
+  <div class="sub">AI 服务使用 OpenAI 兼容接口（默认 DeepSeek）。API Key 仅保存在本地浏览器中。</div>
+
+  <div class="card">
+    <h2>🤖 AI 服务</h2>
+    <label for="baseUrl">Base URL</label>
+    <input type="text" id="baseUrl" placeholder="https://api.deepseek.com">
+    <div class="hint">OpenAI 兼容端点，如 https://api.deepseek.com（会自动拼接 /chat/completions）</div>
+
+    <label for="apiKey">API Key</label>
+    <input type="password" id="apiKey" placeholder="sk-...">
+    <div class="hint">存储于 chrome.storage.local，仅在扩展后台发送请求时使用</div>
+
+    <div class="row">
+      <div>
+        <label for="model">模型</label>
+        <input type="text" id="model" placeholder="deepseek-chat">
+      </div>
+      <div>
+        <label for="temperature">温度（0 ~ 2）</label>
+        <input type="number" id="temperature" min="0" max="2" step="0.1">
+      </div>
+    </div>
+
+    <label for="systemPrompt">系统提示词</label>
+    <textarea id="systemPrompt"></textarea>
+  </div>
+
+  <div class="actions">
+    <button id="saveBtn">保存设置</button>
+    <button class="secondary" id="testBtn">测试连接（获取模型列表）</button>
+  </div>
+  <div id="status"></div>
+  <div class="kv" id="modelList"></div>
+</div>
+<script src="options.js"></script>
+</body>
+</html>
