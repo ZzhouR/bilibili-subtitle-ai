@@ -1,11 +1,13 @@
-// B站字幕 AI 助手 - 侧边栏：字幕浏览 + AI 对话（自动知识库 / 播放同步）
-// 对话历史：独立窗口 history/history.html 管理，此处仅提供入口按钮
+// B站字幕 AI 助手 - 侧边栏（v0.7.0）
+// 字幕展示/同步滚动/点击跳转/当前句条全部在此；浮动面板已移除。
+// AI 对话：自动知识库、流式（含 depth-reasoner 思考过程）、Markdown 渲染、历史记录。
 (() => {
   const $ = sel => document.querySelector(sel);
   const statusEl = $("#status");
   const trackBar = $("#trackBar");
   const trackSelect = $("#trackSelect");
   const subList = $("#subList");
+  const nowLine = $("#nowLine");
   const lineCount = $("#lineCount");
   const msgList = $("#msgList");
   const chatForm = $("#chatForm");
@@ -14,10 +16,14 @@
   const ctxBox = $("#ctxBox");
   const ctxText = $("#ctxText");
   const resizer = $("#subResizer");
+  const md = window.MarkdownLib;
 
   let tracks = [];
   let activeIndex = -1;
   let info = null;
+  let activeTabId = null;
+  let nowTrackIndex = -1; // 当前高亮（侧边栏轨道内）
+  let nowLineIndex = -1;  // 当前高亮行（所有轨道中带索引）
   const selected = new Set();
   let streamSeq = 0;
   let currentStreamId = null;
@@ -28,20 +34,32 @@
     statusEl.className = "p-status" + (kind ? " " + kind : "");
   }
 
+  // ---------- 当前活动标签 ----------
+  async function getActiveTab() {
+    if (activeTabId != null) return activeTabId;
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    activeTabId = tabs && tabs[0] ? tabs[0].id : null;
+    return activeTabId;
+  }
+
   // ---------- 字幕加载 ----------
   async function loadSubtitles() {
     setStatus("正在读取当前页面字幕…");
     subList.innerHTML = '<div class="p-empty">加载中…</div>';
     trackBar.hidden = true;
     try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const tab = tabs && tabs[0];
-      if (!tab || !/^https:\/\/(www\.)?bilibili\.com\/video\//.test(tab.url || "")) {
+      const tabId = await getActiveTab();
+      if (tabId == null) {
+        setStatus("未找到当前标签页", "err");
+        return;
+      }
+      const tab = (await chrome.tabs.get(tabId)) || {};
+      if (!/^https:\/\/(www\.)?bilibili\.com\/video\//.test(tab.url || "")) {
         setStatus("请先打开一个 B 站视频页（www.bilibili.com/video/…）", "err");
         subList.innerHTML = '<div class="p-empty">当前标签页不是 B 站视频页</div>';
         return;
       }
-      const res = await chrome.tabs.sendMessage(tab.id, { type: "GET_CURRENT_SUBTITLES" });
+      const res = await chrome.tabs.sendMessage(tabId, { type: "GET_CURRENT_SUBTITLES" });
       if (!res || !res.ok) {
         setStatus("视频页扩展未就绪，请刷新页面后重试", "err");
         subList.innerHTML = '<div class="p-empty">未获取到字幕：请刷新视频页</div>';
@@ -49,7 +67,7 @@
       }
       tracks = res.tracks || [];
       info = res.info || null;
-      activeIndex = (typeof res.activeIndex === "number" ? res.activeIndex : 0);
+      if (activeIndex < 0 || activeIndex >= tracks.length) activeIndex = 0;
       if (!tracks.length) {
         setStatus("已连接视频页，但该视频暂无字幕", "ok");
         subList.innerHTML = '<div class="p-empty">该视频暂无可用字幕（或需要登录后刷新）</div>';
@@ -101,16 +119,49 @@
         if (selected.has(i)) selected.delete(i); else selected.add(i);
         row.classList.toggle("sel", selected.has(i));
       });
+      row.addEventListener("dblclick", () => jumpTo(line.start));
       frag.appendChild(row);
     });
     subList.appendChild(frag);
+    // 恢复当前高亮
+    if (nowTrackIndex === activeIndex && nowLineIndex >= 0) {
+      applyHighlight(nowLineIndex);
+    }
   }
 
-  function highlightSidebarIndex(trackIndex, idx) {
-    if (trackIndex !== activeIndex) return;
+  // 点击/双击跳转（单击勾选用于 AI 上下文，双击跳转视频；当前句条单击跳转）
+  async function jumpTo(time) {
+    const tabId = await getActiveTab();
+    if (tabId == null) return;
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: "JUMP_TO_TIME", time });
+    } catch (_) { /* ignore */ }
+  }
+
+  // ---------- 播放同步（content 广播所有轨道的当前行） ----------
+  function applyHighlight(index) {
     const rows = subList.querySelectorAll(".p-line");
-    rows.forEach((el, i) => el.classList.toggle("now", i === idx));
-    if (idx >= 0 && rows[idx]) rows[idx].scrollIntoView({ block: "center", behavior: "auto" });
+    rows.forEach((el, i) => el.classList.toggle("now", i === index));
+    if (index >= 0 && rows[index]) rows[index].scrollIntoView({ block: "center", behavior: "auto" });
+  }
+
+  function onPlaybackHighlight(indexes) {
+    if (!Array.isArray(indexes)) return;
+    const hit = indexes.find(x => x.trackIndex === activeIndex);
+    const index = hit ? hit.index : -1;
+    nowTrackIndex = activeIndex;
+    nowLineIndex = index;
+    applyHighlight(index);
+    // 当前句条
+    const lines = currentLines();
+    const line = index >= 0 && lines[index] ? lines[index] : null;
+    if (line) {
+      nowLine.textContent = "▶ " + fmt(line.start) + "  " + line.text;
+      nowLine.dataset.time = String(line.start);
+    } else {
+      nowLine.textContent = "";
+      nowLine.dataset.time = "";
+    }
   }
 
   function fmt(s) {
@@ -135,7 +186,7 @@
     ctxBox.hidden = !text;
   }
 
-  // ---------- 消息渲染 ----------
+  // ---------- 消息渲染（Markdown） ----------
   function addMsg(role, text, tag) {
     const div = document.createElement("div");
     div.className = "msg " + role;
@@ -146,8 +197,9 @@
       div.appendChild(t);
     }
     const body = document.createElement("div");
-    body.className = "body";
-    body.textContent = text;
+    body.className = "body md-body";
+    if (role === "user" || role === "ai") body.innerHTML = md.mdToHtml(text);
+    else body.textContent = text;
     div.appendChild(body);
     msgList.appendChild(div);
     msgList.scrollTop = msgList.scrollHeight;
@@ -164,17 +216,11 @@
       return store[HISTORY_KEY] || [];
     } catch (_) { return []; }
   }
-
   async function persistHistory(list) {
-    try {
-      await chrome.storage.local.set({ [HISTORY_KEY]: list.slice(-HISTORY_LIMIT) });
-    } catch (_) { /* ignore */ }
+    try { await chrome.storage.local.set({ [HISTORY_KEY]: list.slice(-HISTORY_LIMIT) }); } catch (_) {}
   }
-
   function genId() { return "h" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
-
-  let currentRecord = null; // {id,title,bvid,createdAt,updatedAt,messages,autoContext}
-
+  let currentRecord = null;
   async function saveCurrentRecord() {
     if (!currentRecord) return;
     const list = await loadHistory();
@@ -191,10 +237,17 @@
     if (!s) return;
     if (m.error) { finishStream(s, null, "⚠ " + m.error, true); return; }
     if (m.done) { finishStream(s, s.fullText, null, false); return; }
+    if (m.reasoning) {
+      s.reasoningText += m.reasoning;
+      s.reasoningEl.hidden = false;
+      s.reasoningEl.textContent = s.reasoningText;
+      msgList.scrollTop = msgList.scrollHeight;
+    }
     if (m.delta) {
       s.fullText += m.delta;
-      s.textEl.textContent = s.fullText;
-      if (s.textEl.lastChild !== s.caretEl) s.textEl.appendChild(s.caretEl);
+      s.contentEl.innerHTML = md.mdToHtml(s.fullText);
+      if (s.contentEl.lastChild && s.contentEl.lastChild.tagName === "DIV") {} // no-op 保持简单
+      s.contentEl.appendChild(s.caretEl);
       msgList.scrollTop = msgList.scrollHeight;
     }
   }
@@ -204,10 +257,9 @@
     s.saved = true;
     s.caretEl.remove();
     if (isErr) {
-      s.textEl.textContent = errText;
-      s.textEl.classList.add("err");
+      s.contentEl.innerHTML = "<span class=\"err\">" + md.esc(errText) + "</span>";
     } else {
-      s.textEl.textContent = aiText || s.fullText || "";
+      s.contentEl.innerHTML = md.mdToHtml(aiText || s.fullText || "");
     }
     msgList.scrollTop = msgList.scrollHeight;
     if (currentRecord) {
@@ -226,10 +278,7 @@
     let autoCtx = false;
     if (!ctx) {
       const lines = currentLines();
-      if (lines.length) {
-        ctx = buildContextText(lines);
-        autoCtx = true;
-      }
+      if (lines.length) { ctx = buildContextText(lines); autoCtx = true; }
     }
     const messages = [];
     if (ctx) messages.push({ role: "user", content: "【视频字幕知识库】\n" + ctx });
@@ -237,13 +286,8 @@
 
     if (!currentRecord) {
       currentRecord = {
-        id: genId(),
-        title: "",
-        bvid: info ? info.bvid : null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        messages: [],
-        autoContext: false
+        id: genId(), title: "", bvid: info ? info.bvid : null,
+        createdAt: Date.now(), updatedAt: Date.now(), messages: [], autoContext: false
       };
     }
     if (!currentRecord.title) currentRecord.title = text.slice(0, 24) || "未命名对话";
@@ -258,12 +302,17 @@
     const id = "s" + (++streamSeq);
     const body = addMsg("ai", "", "AI 思考中…");
     body.innerHTML = "";
-    const textEl = document.createElement("span");
+    const reasoningEl = document.createElement("div");
+    reasoningEl.className = "md-reasoning";
+    reasoningEl.hidden = true;
+    const contentEl = document.createElement("div");
+    contentEl.className = "md-body";
     const caretEl = document.createElement("span");
     caretEl.className = "caret";
-    textEl.appendChild(caretEl);
-    body.appendChild(textEl);
-    const s = { id, body, textEl, caretEl, fullText: "", saved: false };
+    contentEl.appendChild(caretEl);
+    body.appendChild(reasoningEl);
+    body.appendChild(contentEl);
+    const s = { id, reasoningEl, contentEl, caretEl, reasoningText: "", fullText: "", saved: false };
     aiStreams.set(id, s);
 
     currentStreamId = id;
@@ -272,12 +321,12 @@
       .then(res => {
         if (res && !res.ok) {
           const cur = aiStreams.get(id);
-          if (cur) finishStream(cur, null, "⚠ " + (res.error || "请求失败"), true);
+          if (cur) finishStream(cur, null, (res.error || "请求失败"), true);
         }
       })
       .catch(e => {
         const cur = aiStreams.get(id);
-        if (cur) finishStream(cur, null, "⚠ " + (e.message || e), true);
+        if (cur) finishStream(cur, null, (e.message || e), true);
       })
       .finally(() => {
         if (currentStreamId === id) { currentStreamId = null; showStop(false); }
@@ -286,19 +335,15 @@
 
   function showStop(show) { stopBtn.hidden = !show; }
 
-  // ---------- 历史载入（来自独立历史窗口） ----------
+  // ---------- 历史载入 ----------
   async function openRecord(id) {
     const list = await loadHistory();
     const rec = list.find(r => r.id === id);
     if (!rec) return;
     currentRecord = {
-      id: rec.id,
-      title: rec.title || "未命名对话",
-      bvid: rec.bvid || null,
-      createdAt: rec.createdAt || Date.now(),
-      updatedAt: rec.updatedAt || Date.now(),
-      messages: JSON.parse(JSON.stringify(rec.messages || [])),
-      autoContext: !!rec.autoContext
+      id: rec.id, title: rec.title || "未命名对话", bvid: rec.bvid || null,
+      createdAt: rec.createdAt || Date.now(), updatedAt: rec.updatedAt || Date.now(),
+      messages: JSON.parse(JSON.stringify(rec.messages || [])), autoContext: !!rec.autoContext
     };
     msgList.innerHTML = "";
     const sameVideo = !!(info && rec.bvid && info.bvid === rec.bvid);
@@ -316,16 +361,14 @@
         await chrome.storage.local.remove("pendingOpenRecord");
         await openRecord(store.pendingOpenRecord);
       }
-    } catch (_) { /* ignore */ }
+    } catch (_) {}
   }
 
-  // ---------- 历史入口（独立窗口） ----------
+  // ---------- 历史窗口入口 ----------
   function openHistoryWindow() {
     const url = chrome.runtime.getURL("history/history.html");
     if (chrome.windows && chrome.windows.create) {
-      chrome.windows.create({ url, type: "popup", width: 820, height: 640 }).catch(() => {
-        chrome.tabs.create({ url });
-      });
+      chrome.windows.create({ url, type: "popup", width: 820, height: 640 }).catch(() => chrome.tabs.create({ url }));
     } else {
       chrome.tabs.create({ url });
     }
@@ -335,7 +378,7 @@
   chrome.runtime.onMessage.addListener(msg => {
     if (!msg || typeof msg.type !== "string") return;
     if (msg.type === "AI_STREAM") handleStream(msg);
-    else if (msg.type === "PLAYBACK_HIGHLIGHT") highlightSidebarIndex(msg.trackIndex, msg.index);
+    else if (msg.type === "PLAYBACK_HIGHLIGHT") onPlaybackHighlight(msg.indexes);
     else if (msg.type === "LOAD_HISTORY_TO_PANEL") openRecord(msg.id);
     else if (msg.type === "VIDEO_CHANGED") {
       selected.clear();
@@ -349,6 +392,13 @@
     activeIndex = Number(trackSelect.value);
     selected.clear();
     renderLines();
+    nowLine.dataset.time = "";
+    nowLine.textContent = "";
+  });
+
+  nowLine.addEventListener("click", () => {
+    const t = Number(nowLine.dataset.time);
+    if (isFinite(t)) jumpTo(t);
   });
 
   $("#reloadBtn").addEventListener("click", loadSubtitles);
@@ -394,23 +444,6 @@
     setStatus("新对话（发送提问时会自动附带当前字幕）", "ok");
   });
 
-  // ---------- 侧边栏状态通知 ----------
-  async function notifySidePanelState(open) {
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const tab = tabs && tabs[0];
-      if (tab && tab.id != null) {
-        await chrome.tabs.sendMessage(tab.id, { type: "SIDEPANEL_STATE", open: !!open });
-      }
-    } catch (_) { /* ignore */ }
-  }
-  notifySidePanelState(true);
-  setInterval(() => notifySidePanelState(true), 30000);
-  document.addEventListener("visibilitychange", () => {
-    notifySidePanelState(document.visibilityState === "visible");
-  });
-  window.addEventListener("pagehide", () => notifySidePanelState(false));
-
   // ---------- 字幕区高度拖拽 ----------
   const SPLIT_KEY = "bili-subtitle-ai-panel-split";
   const savedSplit = Number(localStorage.getItem(SPLIT_KEY));
@@ -441,6 +474,6 @@
     document.addEventListener("mouseup", onUp);
   });
 
-  // 初始加载 + 检查历史窗口是否请求载入对话
+  // 初始加载 + 历史待载入检查
   loadSubtitles().then(() => { if (info) checkPendingOpenRecord(); });
 })();

@@ -5,6 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const ROOT = path.join(__dirname, "..");
 const lib = require(path.join(ROOT, "lib/wbi.js"));
+const mdd = require(path.join(ROOT, "lib/markdown.js"));
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -68,6 +69,12 @@ eq("结尾", findIndex(lines, 6), 2);
 eq("越界", findIndex(lines, 6.5), -1);
 eq("空表", findIndex([], 1), -1);
 
+console.log("-- Markdown 渲染");
+ok("md 粗体", mdd.mdToHtml("**b**").includes("<strong>b</strong>"));
+ok("md 代码块", mdd.mdToHtml("```\nlet x=1;\n```").includes("<pre><code>let x=1;</code></pre>"));
+ok("md XSS 转义", !mdd.mdToHtml("<script>alert(1)</script>").includes("<script>"));
+ok("md 链接白名单", !mdd.mdToHtml("[x](javascript:alert(1))").includes("<a href="));
+
 console.log("-- manifest 资源完整性");
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
 const refs = [];
@@ -80,22 +87,24 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.6.0", manifest.version, "0.6.0");
+eq("版本号为 0.7.0", manifest.version, "0.7.0");
 ok("权限含 storage/cookies/sidePanel", ["storage", "cookies", "sidePanel"].every(p => manifest.permissions.includes(p)));
 
 console.log("-- 关键链路存在性");
 const bg = fs.readFileSync(path.join(ROOT, "background.js"), "utf8");
-['importScripts("lib/wbi.js")', "BiliLib.encWbi", "x/player/wbi/v2", "x/player/v2", "x/web-interface/view", "resolveCid", "GET_SUBTITLES", "AI_CHAT", "AI_STOP", "AI_TEST", "chrome.cookies.getAll", "getReader"].forEach(k => ok("background 包含 " + k, bg.includes(k)));
+['importScripts("lib/wbi.js")', "BiliLib.encWbi", "x/player/wbi/v2", "x/player/v2", "x/web-interface/view", "resolveCid", "GET_SUBTITLES", "AI_CHAT", "AI_STOP", "AI_TEST", "chrome.cookies.getAll", "getReader", "VIDEO_CHANGED", "reasoning_content", "reasoningLevel", "reasoningModel"].forEach(k => ok("background 包含 " + k, bg.includes(k)));
 const extractor = fs.readFileSync(path.join(ROOT, "content/extractor.js"), "utf8");
 ok("extractor 允许 cid 为空", extractor.includes("return { bvid, cid }"));
 ok("extractor 有自动重试", extractor.includes("setTimeout(requestSubtitles, 3000)"));
 ok("extractor 广播 VIDEO_CHANGED", extractor.includes("VIDEO_CHANGED"));
 const view = fs.readFileSync(path.join(ROOT, "content/subtitle-view.js"), "utf8");
-["GET_CURRENT_SUBTITLES", "SET_ACTIVE_TRACK", "scrollIntoView", "SIDEPANEL_STATE", "150000", "PLAYBACK_HIGHLIGHT"].forEach(k => ok("view.js 包含 " + k, view.includes(k)));
+["GET_CURRENT_SUBTITLES", "JUMP_TO_TIME", "PLAYBACK_HIGHLIGHT", "broadcastHighlight", "findIndex"].forEach(k => ok("view.js 包含 " + k, view.includes(k)));
+ok("view.js 已无浮动面板 UI（bili-sub-ai-panel 移除）", !view.includes("bili-sub-ai-panel") && !view.includes("bili-sub-ai-float"));
 const panel = fs.readFileSync(path.join(ROOT, "sidepanel/panel.js"), "utf8");
-["GET_CURRENT_SUBTITLES", "AI_STREAM", "AI_STOP", "SIDEPANEL_STATE", "subResizer", "--subtitle-h", "PLAYBACK_HIGHLIGHT", "VIDEO_CHANGED", "chatHistory", "sendUserMessage", "【视频字幕知识库】", "historyBtn", "openHistoryWindow", "LOAD_HISTORY_TO_PANEL", "pendingOpenRecord"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
+["GET_CURRENT_SUBTITLES", "AI_STREAM", "AI_STOP", "subResizer", "--subtitle-h", "PLAYBACK_HIGHLIGHT", "VIDEO_CHANGED", "chatHistory", "sendUserMessage", "【视频字幕知识库】", "historyBtn", "openHistoryWindow", "LOAD_HISTORY_TO_PANEL", "pendingOpenRecord", "mdToHtml", "JUMP_TO_TIME", "nowLine", "reasoning"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
+ok("panel.js 已移除 SIDEPANEL_STATE 逻辑", !panel.includes("SIDEPANEL_STATE"));
 const historyJs = fs.readFileSync(path.join(ROOT, "history/history.js"), "utf8");
-["chatHistory", "pendingOpenRecord", "sidePanel.open", "renameCurrent", "deleteCurrent"].forEach(k => ok("history.js 包含 " + k, historyJs.includes(k)));
+["chatHistory", "pendingOpenRecord", "sidePanel.open", "renameCurrent", "deleteCurrent", "MarkdownLib"].forEach(k => ok("history.js 包含 " + k, historyJs.includes(k)));
 ok("history.html 存在", fs.existsSync(path.join(ROOT, "history/history.html")));
 ok("history.css 存在", fs.existsSync(path.join(ROOT, "history/history.css")));
 

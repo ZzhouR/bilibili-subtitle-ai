@@ -28,7 +28,7 @@
 | `lib/wbi.js` | 纯函数：MD5、wbi 签名（`encWbi`）、字幕解析（`parseTs`/`normalizeBody`） | 无 DOM/Chrome 依赖，可被 SW importScripts 与 node require |
 | `background.js` | 唯一访问网络/密钥的模块；消息路由；缓存（字幕 30min、wbi 密钥 1d、cid 内存缓存） | API Key 永不进入页面上下文 |
 | `content/extractor.js` | 识别视频页 bvid/cid，请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析）；失败自动重试 2 次（3s 间隔） |
-| `content/subtitle-view.js` | 浮动字幕面板：轨道切换、播放同步滚动/高亮、点击跳转、悬浮字幕条、拖拽/折叠 | 依赖 `SUB_READY` 广播；响应 `SIDEPANEL_STATE` 隐藏自己 |
+| `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME` | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI |
 | `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库） | 与浮动面板互斥显示（并入机制） |
 | `history/` | 对话历史管理独立窗口：搜索/查看/重命名/删除/载入侧边栏续聊 | 与侧边栏经 `pendingOpenRecord` + 消息协作 |
 | `options/` | AI 服务配置，存 `chrome.storage.local` 的 `aiSettings` | 支持测试连接（GET /models） |

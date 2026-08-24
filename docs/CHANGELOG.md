@@ -1,5 +1,12 @@
 # 变更日志（CHANGELOG）
 
+## [0.7.0] - 2025
+### 变更
+- **完全移除视频页浮动字幕面板**：`subtitle-view.js` 精简为无 UI 播放同步服务（广播 `PLAYBACK_HIGHLIGHT`，响应 `JUMP_TO_TIME`）；字幕展示/同步滚动/当前句条/点击跳转全部在侧边栏完成。新增"当前句"显示条（跟随播放，点击跳转）。
+- **SPA 切换视频链路修复**：`VIDEO_CHANGED` 改为 content → **background 统一转发** → 侧边栏（可靠通知，不再依赖 content 直发）。
+- **思考等级**：设置页新增"思考等级"（普通 deepseek-chat / 深度思考 deepseek-reasoner）；流式支持 `reasoning_content`，侧边栏以灰色"思考过程"块展示后再输出正式回答。
+- **Markdown 渲染**：新增零依赖 `lib/markdown.js`（代码块/标题/粗斜体/列表/引用/链接 + XSS 转义与链接白名单）；AI 回复与历史回显均按 Markdown 渲染。
+
 ## [0.6.0] - 2025
 ### 变更
 - **对话历史独立为单独界面**：侧边栏保留「📚 历史」入口按钮，点击打开独立窗口 `history/history.html`（820×640 popup）。

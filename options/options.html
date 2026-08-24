@@ -64,6 +64,13 @@ button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
       </div>
     </div>
 
+    <label for="reasoningLevel">思考等级</label>
+    <select id="reasoningLevel">
+      <option value="0">普通（deepseek-chat，快速回答）</option>
+      <option value="1">深度思考（deepseek-reasoner，先展示思考过程）</option>
+    </select>
+    <div class="hint">深度思考使用推理模型，回答前会输出思考过程（reasoning_content），响应更慢但更严谨</div>
+
     <label for="systemPrompt">系统提示词</label>
     <textarea id="systemPrompt"></textarea>
   </div>

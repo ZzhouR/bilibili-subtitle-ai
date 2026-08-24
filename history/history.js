@@ -55,6 +55,8 @@
     listWrap.appendChild(frag);
   }
 
+  const md = window.MarkdownLib;
+
   function openDetail(id) {
     const rec = records.find(r => r.id === id);
     if (!rec) return;
@@ -74,7 +76,11 @@
     (rec.messages || []).forEach(m => {
       const div = document.createElement("div");
       div.className = "msg " + (m.role === "user" ? "user" : m.role === "ai" ? "ai" : "sys");
-      div.textContent = m.content;
+      const body = document.createElement("div");
+      body.className = "md-body";
+      if (m.role === "user" || m.role === "ai") body.innerHTML = md.mdToHtml(m.content);
+      else body.textContent = m.content;
+      div.appendChild(body);
       msgs.appendChild(div);
     });
     msgs.scrollTop = msgs.scrollHeight;

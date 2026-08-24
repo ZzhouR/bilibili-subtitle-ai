@@ -192,6 +192,8 @@ const DEFAULT_SETTINGS = {
   baseUrl: "https://api.deepseek.com",
   apiKey: "",
   model: "deepseek-chat",
+  reasoningLevel: 0,               // 0=普通 1=深度思考
+  reasoningModel: "deepseek-reasoner",
   temperature: 0.7,
   systemPrompt: "你是专业的视频内容分析助手。你只基于用户提供的视频字幕进行总结、提炼、翻译与问答。回答使用与问题相同的语言，表达简洁、结构清晰。"
 };
@@ -213,8 +215,11 @@ async function handleAiChat(msg) {
   const streamId = msg.id;
   if (streamId) activeStreams.set(streamId, controller);
 
+  // 思考等级：1 时切换为推理模型（如 deepseek-reasoner），可输出 reasoning_content
+  const useReasoning = Number(settings.reasoningLevel) === 1;
+  const model = useReasoning ? (settings.reasoningModel || DEFAULT_SETTINGS.reasoningModel) : (settings.model || DEFAULT_SETTINGS.model);
   const payload = {
-    model: settings.model || DEFAULT_SETTINGS.model,
+    model,
     messages: [
       { role: "system", content: settings.systemPrompt || DEFAULT_SETTINGS.systemPrompt },
       ...(msg.messages || [])
@@ -263,8 +268,9 @@ async function handleAiChat(msg) {
         if (data === "[DONE]") continue;
         try {
           const j = JSON.parse(data);
-          const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
-          if (delta) emit({ delta });
+          const delta = j.choices && j.choices[0] && j.choices[0].delta;
+          if (delta && delta.reasoning_content) emit({ reasoning: delta.reasoning_content });
+          if (delta && delta.content) emit({ delta: delta.content });
         } catch (_) { /* 忽略不完整块 */ }
       }
     }
@@ -307,6 +313,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return { ok: true, version: chrome.runtime.getManifest().version };
       case "GET_SUBTITLES":
         return await handleGetSubtitles(msg);
+      case "VIDEO_CHANGED":
+        // 统一转发：content → background → 所有扩展页面（侧边栏自动刷新字幕）
+        chrome.runtime.sendMessage({ type: "VIDEO_CHANGED", bvid: msg.bvid || null }).catch(() => {});
+        return { ok: true };
       case "AI_CHAT":
         return await handleAiChat(msg);
       case "AI_STOP": {
