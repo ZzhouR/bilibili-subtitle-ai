@@ -1,5 +1,12 @@
 # 变更日志（CHANGELOG）
 
+## [0.7.2] - 2025
+### 修复（多标签页切换字幕不刷新/报错）
+- **实时跟随当前活动标签页**：移除 `activeTabId` 缓存，每次加载/跳转实时 `chrome.tabs.query` 获取当前标签页；从任意 B 站视频标签切换到另一个视频标签，侧边栏立即显示新标签的字幕。
+- **标签事件监听**：`chrome.tabs.onActivated`（用户切换标签）+ `chrome.tabs.onUpdated`（站内导航完成）触发刷新，防抖合并 300–500ms。
+- **加载时序防乱序**：`subLoadSeq` 序号校验，快速连续切换时旧标签请求结果不再覆盖新标签。
+- **错误友好化**：切换到非 B 站视频页显示引导提示；发送消息失败不再抛"Could not establish connection"式报错。
+
 ## [0.7.1] - 2025
 ### 修复（SPA 切换视频字幕不更新）
 - **URL 检测四通道**：MutationObserver + popstate + history.pushState/replaceState 包装 + 800ms 轮询兜底，覆盖 B 站分P切换（URL 仅改 ?p=N）与所有 SPA 跳转。

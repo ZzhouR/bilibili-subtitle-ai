@@ -87,7 +87,7 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.7.1", manifest.version, "0.7.1");
+eq("版本号为 0.7.2", manifest.version, "0.7.2");
 ok("权限含 storage/cookies/sidePanel", ["storage", "cookies", "sidePanel"].every(p => manifest.permissions.includes(p)));
 
 console.log("-- 关键链路存在性");
@@ -106,6 +106,8 @@ ok("view.js 已无浮动面板 UI（bili-sub-ai-panel 移除）", !view.includes
 const panel = fs.readFileSync(path.join(ROOT, "sidepanel/panel.js"), "utf8");
 ["GET_CURRENT_SUBTITLES", "AI_STREAM", "AI_STOP", "subResizer", "--subtitle-h", "PLAYBACK_HIGHLIGHT", "VIDEO_CHANGED", "chatHistory", "sendUserMessage", "【视频字幕知识库】", "historyBtn", "openHistoryWindow", "LOAD_HISTORY_TO_PANEL", "pendingOpenRecord", "mdToHtml", "JUMP_TO_TIME", "nowLine", "reasoning"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 ["SUBTITLES_READY", "SUBTITLES_ERROR", "videoSwitchTimer"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
+ok("panel.js 标签页切换监听", panel.includes("chrome.tabs.onActivated") && panel.includes("chrome.tabs.onUpdated"));
+ok("panel.js 实时跟随（无标签缓存）", !panel.includes("activeTabId") && panel.includes("subLoadSeq"));
 ok("panel.js 已移除 SIDEPANEL_STATE 逻辑", !panel.includes("SIDEPANEL_STATE"));
 const historyJs = fs.readFileSync(path.join(ROOT, "history/history.js"), "utf8");
 ["chatHistory", "pendingOpenRecord", "sidePanel.open", "renameCurrent", "deleteCurrent", "MarkdownLib"].forEach(k => ok("history.js 包含 " + k, historyJs.includes(k)));

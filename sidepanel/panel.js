@@ -21,7 +21,6 @@
   let tracks = [];
   let activeIndex = -1;
   let info = null;
-  let activeTabId = null;
   let nowTrackIndex = -1; // 当前高亮（侧边栏轨道内）
   let nowLineIndex = -1;  // 当前高亮行（所有轨道中带索引）
   const selected = new Set();
@@ -35,35 +34,48 @@
     statusEl.className = "p-status" + (kind ? " " + kind : "");
   }
 
-  // ---------- 当前活动标签 ----------
+  // ---------- 当前活动标签页（实时查询，绝不缓存：用户在多个标签页间切换时必须跟随） ----------
+  let subLoadSeq = 0;      // 加载序号：防止快速切换时旧请求结果覆盖新标签
+  let refreshTimer = null; // 防抖：标签切换/导航事件合并
+
   async function getActiveTab() {
-    if (activeTabId != null) return activeTabId;
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    activeTabId = tabs && tabs[0] ? tabs[0].id : null;
-    return activeTabId;
+    return tabs && tabs[0] ? tabs[0] : null;
   }
 
-  // ---------- 字幕加载 ----------
+  function scheduleRefresh(delay) {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(loadSubtitles, delay == null ? 400 : delay);
+  }
+
+  // ---------- 字幕加载（跟随当前活动标签页） ----------
   async function loadSubtitles() {
-    setStatus("正在读取当前页面字幕…");
-    subList.innerHTML = '<div class="p-empty">加载中…</div>';
-    trackBar.hidden = true;
+    const seq = ++subLoadSeq;
     try {
-      const tabId = await getActiveTab();
-      if (tabId == null) {
+      const tab = await getActiveTab();
+      if (!tab) {
+        if (seq !== subLoadSeq) return;
         setStatus("未找到当前标签页", "err");
+        subList.innerHTML = '<div class="p-empty">未找到当前标签页</div>';
         return;
       }
-      const tab = (await chrome.tabs.get(tabId)) || {};
       if (!/^https:\/\/(www\.)?bilibili\.com\/video\//.test(tab.url || "")) {
-        setStatus("请先打开一个 B 站视频页（www.bilibili.com/video/…）", "err");
-        subList.innerHTML = '<div class="p-empty">当前标签页不是 B 站视频页</div>';
+        if (seq !== subLoadSeq) return;
+        setStatus("当前标签页不是 B 站视频页（可切换到视频标签页）");
+        trackBar.hidden = true;
+        lineCount.textContent = "";
+        subList.innerHTML = '<div class="p-empty">当前标签页不是 B 站视频页，请切换到视频标签页</div>';
         return;
       }
-      const res = await chrome.tabs.sendMessage(tabId, { type: "GET_CURRENT_SUBTITLES" });
+      setStatus("正在读取当前页面字幕…");
+      subList.innerHTML = '<div class="p-empty">加载中…</div>';
+      trackBar.hidden = true;
+
+      const res = await chrome.tabs.sendMessage(tab.id, { type: "GET_CURRENT_SUBTITLES" });
+      if (seq !== subLoadSeq) return; // 已被更新的加载替代
       if (!res || !res.ok) {
         setStatus("视频页扩展未就绪，请刷新页面后重试", "err");
-        subList.innerHTML = '<div class="p-empty">未获取到字幕：请刷新视频页</div>';
+        subList.innerHTML = '<div class="p-empty">未获取到字幕：请刷新视频页后重试</div>';
         return;
       }
       tracks = res.tracks || [];
@@ -80,8 +92,9 @@
       setStatus("字幕就绪：" + tracks.length + " 条轨道" + (info ? "（" + info.bvid + "）" : ""), "ok");
       renderLines();
     } catch (e) {
-      setStatus("读取字幕失败：" + (e.message || e), "err");
-      subList.innerHTML = '<div class="p-empty">读取字幕失败，请刷新视频页重试</div>';
+      if (seq !== subLoadSeq) return;
+      setStatus("读取字幕失败，请刷新视频页后重试", "err");
+      subList.innerHTML = '<div class="p-empty">读取字幕失败：' + md.esc(String((e && e.message) || e)) + "</div>";
     }
   }
 
@@ -132,10 +145,10 @@
 
   // 点击/双击跳转（单击勾选用于 AI 上下文，双击跳转视频；当前句条单击跳转）
   async function jumpTo(time) {
-    const tabId = await getActiveTab();
-    if (tabId == null) return;
+    const tab = await getActiveTab();
+    if (!tab) return;
     try {
-      await chrome.tabs.sendMessage(tabId, { type: "JUMP_TO_TIME", time });
+      await chrome.tabs.sendMessage(tab.id, { type: "JUMP_TO_TIME", time });
     } catch (_) { /* ignore */ }
   }
 
@@ -381,6 +394,9 @@
     if (msg.type === "AI_STREAM") handleStream(msg);
     else if (msg.type === "PLAYBACK_HIGHLIGHT") onPlaybackHighlight(msg.indexes);
     else if (msg.type === "LOAD_HISTORY_TO_PANEL") openRecord(msg.id);
+    else if (msg.type === "TAB_REFRESH_REQUEST") {
+      scheduleRefresh(200);
+    }
     else if (msg.type === "VIDEO_CHANGED") {
       selected.clear();
       setContext("");
@@ -481,6 +497,15 @@
     resizer.classList.add("drag");
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
+  });
+
+  // ---------- 标签页切换 / 导航实时跟随 ----------
+  // 用户在多个标签页之间切换：立即刷新为当前活动标签页的字幕
+  chrome.tabs.onActivated.addListener(() => scheduleRefresh(300));
+  // 标签页内导航完成（含 B 站站内跳转）：活动标签更新时刷新
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+    if (changeInfo.status !== "complete" || !tab || !tab.active) return;
+    scheduleRefresh(500);
   });
 
   // 初始加载 + 历史待载入检查
