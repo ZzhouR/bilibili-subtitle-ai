@@ -6,6 +6,7 @@
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
+[hidden] { display: none !important; }
 body {
   background: var(--bg); color: var(--text);
   font: 13px/1.55 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;
