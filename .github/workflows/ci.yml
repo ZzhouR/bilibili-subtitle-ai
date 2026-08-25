@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax check
+        run: for f in background.js lib/wbi.js lib/markdown.js lib/latex.js lib/sse.js content/*.js sidepanel/panel.js history/history.js options/options.js popup/popup.js test/smoke-test.js; do node --check "$f"; done
+      - name: Manifest validate
+        run: node -e "const m=require('./manifest.json'); if(m.manifest_version!==3) process.exit(1); console.log('manifest OK')"
+      - name: Smoke tests
+        run: node test/smoke-test.js
+      - name: Package zip
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          zip -r bilibili-subtitle-ai-v$VERSION.zip . -x '*.git*' 'node_modules/*' 'test/*' 'docs/screenshots/*'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-subtitle-ai
+          path: bilibili-subtitle-ai-*.zip

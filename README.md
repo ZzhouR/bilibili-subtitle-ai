@@ -112,6 +112,18 @@ cd ..
 zip -r bilibili-subtitle-ai-v0.7.1.zip bilibili-subtitle-ai -x "*/test/*" "*/docs/screenshots/*"
 ```
 
+## 📋 Manifest 权限说明
+
+| 权限 | 用途 |
+|---|---|
+| `sidePanel` | 打开 AI 侧边栏 |
+| `storage` | 保存设置、历史与字幕缓存 |
+| `cookies` | 读取 B 站登录态（SESSDATA）请求字幕 |
+| `tabs` / `activeTab` | 跟随当前标签页、截图视频画面（AI 总结） |
+| host permissions | 请求 B 站接口与用户配置的 AI 服务 |
+
+> 使用第三方兼容 API 时，字幕与提问内容会发送到该服务商；扩展本身不收集数据。
+
 ## 🔒 隐私与安全
 
 - API Key 仅保存在本地 `chrome.storage.local`，只在扩展 Service Worker 中用于请求；

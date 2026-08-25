@@ -150,6 +150,16 @@
     }
   }
 
+  // AI 回复中的 [mm:ss] 时间戳点击跳转
+  function bindTimestampJump(container) {
+    container.addEventListener("click", e => {
+      const ts = e.target.closest(".ts-link");
+      if (ts) { const t = Number(ts.dataset.t); if (isFinite(t)) jumpTo(t); }
+    });
+  }
+  bindTimestampJump(msgList);
+  bindTimestampJump(summaryResult);
+
   // 点击/双击跳转（单击勾选用于 AI 上下文，双击跳转视频；当前句条单击跳转）
   async function jumpTo(time) {
     const tab = await getActiveTab();
@@ -291,15 +301,66 @@
     aiStreams.delete(s.id);
   }
 
+  // ---- 长字幕分块检索（suggestion P0#2）：全文≤4000字符直接全文；否则按关键词+播放位置取相关片段 ----
+  const STOP_WORDS = new Set(["这个", "什么", "怎么", "我们", "一个", "那个", "就是", "还有", "可以", "因为", "所以", "如果", "如何", "为什么", "一下", "现在", "这里", "视频", "字幕", "总结", "讲解", "老师", "请问", "帮我", "关于"]);
+
+  function extractKeywords(question) {
+    const parts = String(question || "").match(/[\u4e00-\u9fa5]{2,}|[A-Za-z]{3,}/g) || [];
+    const out = [];
+    parts.forEach(p => { if (!STOP_WORDS.has(p) && !out.includes(p)) out.push(p); });
+    return out.slice(0, 6);
+  }
+
+  function buildAutoContext(question, lines, curTime) {
+    const all = buildContextText(lines);
+    if (all.length <= 4000) return { text: all, mode: "full", count: lines.length };
+    const kws = extractKeywords(question);
+    const hit = new Set();
+    lines.forEach((l, i) => {
+      const hay = l.text.toLowerCase();
+      if (kws.some(k => hay.includes(k.toLowerCase()))) {
+        for (let d = -2; d <= 2; d++) if (lines[i + d]) hit.add(i + d);
+      }
+    });
+    if (curTime != null) {
+      lines.forEach((l, i) => { if (Math.abs((l.start + l.end) / 2 - curTime) <= 90) hit.add(i); });
+    }
+    let idxs = Array.from(hit).sort((a, b) => a - b);
+    if (!idxs.length) {
+      for (let n = 0; n < 10; n++) idxs.push(Math.min(lines.length - 1, Math.round(lines.length * n / 10)));
+    }
+    idxs = idxs.slice(0, 80);
+    return {
+      text: idxs.map(i => "[" + fmt(lines[i].start) + "] " + lines[i].text).join("\n"),
+      mode: "relevant",
+      count: idxs.length
+    };
+  }
+
+  async function getPlaybackTime() {
+    try {
+      const tab = await getActiveTab();
+      if (!tab) return null;
+      const pt = await chrome.tabs.sendMessage(tab.id, { type: "GET_PLAYBACK_TIME" });
+      return pt && pt.ok ? pt.time : null;
+    } catch (_) { return null; }
+  }
+
   function sendUserMessage(userText) {
     const text = String(userText || "").trim();
     if (!text) { addMsg("sys", "请输入提问内容"); return; }
 
     let ctx = ctxText.textContent.trim();
     let autoCtx = false;
+    let autoInfo = "";
     if (!ctx) {
       const lines = currentLines();
-      if (lines.length) { ctx = buildContextText(lines); autoCtx = true; }
+      if (lines.length) {
+        autoCtx = true;
+        const c = buildAutoContext(text, lines, null);
+        ctx = c.text;
+        autoInfo = c.mode === "full" ? "全文 " + c.count + " 行" : "相关片段 " + c.count + " 行";
+      }
     }
     const messages = [];
     if (ctx) messages.push({ role: "user", content: "【视频字幕知识库】\n" + ctx });
@@ -316,7 +377,7 @@
     currentRecord.messages.push({ role: "user", content: text });
     currentRecord.updatedAt = Date.now();
 
-    if (autoCtx) addMsg("sys", "已自动附带字幕知识库（当前轨道 " + currentLines().length + " 行）");
+    if (autoCtx) addMsg("sys", "已自动附带字幕上下文（" + autoInfo + "，按关键词+播放位置检索）");
     else if (ctx) addMsg("sys", "已附带字幕上下文");
     addMsg("user", text);
 

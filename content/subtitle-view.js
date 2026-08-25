@@ -100,6 +100,11 @@
       sendResponse({ ok: true });
       return;
     }
+    if (msg.type === "GET_PLAYBACK_TIME") {
+      const v = findVideo();
+      sendResponse({ ok: true, time: v ? v.currentTime || 0 : 0, duration: v ? (v.duration || 0) : 0 });
+      return;
+    }
     // AI 总结：暂停→seek 到目标时间→画面稳定后返回视频元素位置（供后台截图裁剪）
     if (msg.type === "SEEK_VIDEO") {
       const v = findVideo();

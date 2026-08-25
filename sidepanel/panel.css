@@ -87,8 +87,12 @@ body {
 .p-head-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
 .p-head-btns { display: flex; gap: 6px; flex-shrink: 0; }
 #summaryView { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
-.p-seglen { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); }
-.p-seglen input { width: 54px; padding: 3px 6px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; }
+.p-seglen { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.p-seglen input { width: 54px; min-width: 54px; padding: 3px 6px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; }
+/* AI 总结头部：允许换行，避免窄面板下标题/分段/按钮互相挤压 */
+#summaryView .p-sec-head { flex-wrap: wrap; row-gap: 6px; padding: 8px 12px; }
+#summaryView .p-sec-head > span:first-child { flex: 1 1 100%; }
+#summaryView .p-seglen, #summaryView .btn { flex-shrink: 0; }
 .p-summary-status { padding: 6px 12px; color: var(--muted); font-size: 12px; }
 .p-summary-progress { height: 3px; background: #f1f2f3; margin: 0 12px 6px; border-radius: 2px; overflow: hidden; }
 .p-summary-progress #summaryBar { height: 100%; width: 0; background: var(--blue); transition: width .3s; }
@@ -150,6 +154,8 @@ body {
 .md-body ul, .md-body ol { margin: 4px 0 6px; padding-left: 18px; }
 .md-body blockquote { border-left: 3px solid var(--blue); margin: 6px 0; padding: 2px 10px; color: var(--muted); background: rgba(0,161,214,.05); border-radius: 0 6px 6px 0; }
 .md-body a { color: var(--blue); }
+.ts-link { color: var(--blue); cursor: pointer; font-variant-numeric: tabular-nums; }
+.ts-link:hover { text-decoration: underline; }
 .md-reasoning {
   color: var(--muted); border-left: 3px solid #dfe1e4; padding: 0 0 0 8px; margin-bottom: 6px;
   font-size: 11.5px; white-space: pre-wrap; max-height: 160px; overflow: auto;

@@ -6,6 +6,8 @@ const crypto = require("crypto");
 const ROOT = path.join(__dirname, "..");
 const lib = require(path.join(ROOT, "lib/wbi.js"));
 const mdd = require(path.join(ROOT, "lib/markdown.js"));
+const sselib = require(path.join(ROOT, "lib/sse.js"));
+global.LatexLib = lib;
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -75,6 +77,22 @@ ok("md 代码块", mdd.mdToHtml("```\nlet x=1;\n```").includes("<pre><code>let x
 ok("md XSS 转义", !mdd.mdToHtml("<script>alert(1)</script>").includes("<script>"));
 ok("md 链接白名单", !mdd.mdToHtml("[x](javascript:alert(1))").includes("<a href="));
 
+console.log("-- SSE 解析");
+let sseBuf = "";
+const r1 = sselib.feedBuffer(sseBuf, "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n");
+sseBuf = r1.buffer;
+eq("SSE 分片1", r1.lines.length, 1);
+const p1 = sselib.parseLine(r1.lines[0]);
+eq("SSE delta", p1.delta, "你");
+const r2 = sselib.feedBuffer(sseBuf, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考\"}}]}\n\ndata: [DONE]\n\n");
+sseBuf = r2.buffer;
+const p2 = sselib.parseLine(r2.lines[0]);
+eq("SSE reasoning", p2.reasoning, "思考");
+ok("SSE [DONE]", sselib.parseLine("data: [DONE]").done);
+ok("SSE 跨块缓冲", sselib.feedBuffer("", "data: {\"x\"") !== null);
+console.log("-- 时间戳渲染");
+ok("md 时间戳链接", mdd.mdToHtml("跳转到 [12:36] 看看").includes('class="ts-link" data-t="756"'));
+
 console.log("-- manifest 资源完整性");
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
 const refs = [];
@@ -87,12 +105,12 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.8.0", manifest.version, "0.8.0");
+eq("版本号为 0.9.0", manifest.version, "0.9.0");
 ok("权限含 storage/cookies/sidePanel/activeTab", ["storage", "cookies", "sidePanel", "activeTab"].every(p => manifest.permissions.includes(p)));
 
 console.log("-- 关键链路存在性");
 const bg = fs.readFileSync(path.join(ROOT, "background.js"), "utf8");
-['importScripts("lib/wbi.js")', "BiliLib.encWbi", "x/player/wbi/v2", "x/player/v2", "x/web-interface/view", "resolveCid", "GET_SUBTITLES", "AI_CHAT", "AI_STOP", "AI_TEST", "chrome.cookies.getAll", "getReader", "VIDEO_CHANGED", "SUBTITLES_READY", "SUBTITLES_ERROR", "reasoning_content", "reasoningLevel", "reasoningModel", "CAPTURE_FRAME", "AI_VISION", "OffscreenCanvas", "createImageBitmap", "visionModel"].forEach(k => ok("background 包含 " + k, bg.includes(k)));
+['importScripts("lib/wbi.js", "lib/sse.js")', "BiliLib.encWbi", "x/player/wbi/v2", "x/player/v2", "x/web-interface/view", "resolveCid", "GET_SUBTITLES", "AI_CHAT", "AI_STOP", "AI_TEST", "chrome.cookies.getAll", "getReader", "VIDEO_CHANGED", "SUBTITLES_READY", "SUBTITLES_ERROR", "reasoning_content", "reasoningLevel", "reasoningModel", "CAPTURE_FRAME", "AI_VISION", "OffscreenCanvas", "createImageBitmap", "visionModel", "SseLib", "subtitleCache", "HTTP 404"].forEach(k => ok("background 包含 " + k, bg.includes(k)));
 const extractor = fs.readFileSync(path.join(ROOT, "content/extractor.js"), "utf8");
 ok("extractor 允许 cid 为空（携带 p）", extractor.includes("return { bvid, cid, p }"));
 ok("extractor 有自动重试", extractor.includes("setTimeout(requestSubtitles, 3000)"));
@@ -101,12 +119,13 @@ ok("extractor 四通道 URL 检测", extractor.includes("pushState") && extracto
 ok("extractor 分P解析 p", extractor.includes("URLSearchParams") && extractor.includes("pages"));
 ok("extractor 字幕就绪通知", extractor.includes("SUBTITLES_READY"));
 const view = fs.readFileSync(path.join(ROOT, "content/subtitle-view.js"), "utf8");
-["GET_CURRENT_SUBTITLES", "JUMP_TO_TIME", "PLAYBACK_HIGHLIGHT", "broadcastHighlight", "findIndex", "VIDEO_CHANGED", "SEEK_VIDEO"].forEach(k => ok("view.js 包含 " + k, view.includes(k)));
+["GET_CURRENT_SUBTITLES", "JUMP_TO_TIME", "PLAYBACK_HIGHLIGHT", "broadcastHighlight", "findIndex", "VIDEO_CHANGED", "SEEK_VIDEO", "GET_PLAYBACK_TIME"].forEach(k => ok("view.js 包含 " + k, view.includes(k)));
 ok("view.js 已无浮动面板 UI（bili-sub-ai-panel 移除）", !view.includes("bili-sub-ai-panel") && !view.includes("bili-sub-ai-float"));
 const panel = fs.readFileSync(path.join(ROOT, "sidepanel/panel.js"), "utf8");
 ["GET_CURRENT_SUBTITLES", "AI_STREAM", "AI_STOP", "subResizer", "--subtitle-h", "PLAYBACK_HIGHLIGHT", "VIDEO_CHANGED", "chatHistory", "sendUserMessage", "【视频字幕知识库】", "historyBtn", "openHistoryWindow", "LOAD_HISTORY_TO_PANEL", "pendingOpenRecord", "mdToHtml", "JUMP_TO_TIME", "nowLine", "reasoning"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 ["SUBTITLES_READY", "SUBTITLES_ERROR", "videoSwitchTimer"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 ["startSummary", "CAPTURE_FRAME", "AI_VISION", "summaryView", "buildSegments", "runSummaryChat"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
+["extractKeywords", "buildAutoContext", "GET_PLAYBACK_TIME", "ts-link"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 ok("panel.js 标签页切换监听", panel.includes("chrome.tabs.onActivated") && panel.includes("chrome.tabs.onUpdated"));
 ok("panel.js 实时跟随（无标签缓存）", !panel.includes("activeTabId") && panel.includes("subLoadSeq"));
 ok("panel.js 已移除 SIDEPANEL_STATE 逻辑", !panel.includes("SIDEPANEL_STATE"));
@@ -122,6 +141,8 @@ const latexJs = fs.readFileSync(path.join(ROOT, "lib/latex.js"), "utf8");
 ["latexToHtml", "GREEK", "lmatrix"].forEach(k => ok("latex.js 包含 " + k, latexJs.includes(k)));
 ok("panel.html 含历史入口按钮且无内嵌历史视图", panelHtml.includes("historyBtn") && !panelHtml.includes("historyView"));
 ["ARCHITECTURE.md", "DECISIONS.md", "CHANGELOG.md", "FEATURE-AI-SUMMARY.md"].forEach(k => ok("docs/" + k + " 存在", fs.existsSync(path.join(ROOT, "docs", k))));
+ok("CI workflow 存在", fs.existsSync(path.join(ROOT, ".github/workflows/ci.yml")));
+ok("sse.js 存在", fs.existsSync(path.join(ROOT, "lib/sse.js")));
 const optsJs = fs.readFileSync(path.join(ROOT, "options/options.js"), "utf8");
 ["visionBaseUrl", "visionApiKey", "visionModel"].forEach(k => ok("options.js 包含 " + k, optsJs.includes(k)));
 

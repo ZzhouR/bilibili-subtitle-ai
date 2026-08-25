@@ -1,6 +1,6 @@
 // B站字幕 AI 助手 - Service Worker
 // 职责：字幕接口代理（wbi 签名 + 登录态 + 缓存）、AI 请求代理（流式 + 可中断）、设置持久化
-importScripts("lib/wbi.js");
+importScripts("lib/wbi.js", "lib/sse.js");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -34,8 +34,14 @@ async function fetchWithRetry(url, options = {}, retries = 2) {
       });
       if (res.status === 412 || res.status === 429) {
         await sleep(500 * (i + 1));
-        lastErr = new Error("HTTP " + res.status + " 风控/限流");
+        lastErr = new Error("HTTP " + res.status + " 风控/限流，已重试");
         continue;
+      }
+      if (res.status === 401 || res.status === 403) {
+        throw new Error("HTTP " + res.status + "：请检查登录态 / API Key 是否有效");
+      }
+      if (res.status === 404) {
+        throw new Error("HTTP 404：接口或资源不存在（B 站接口可能已变动）");
       }
       return res;
     } catch (e) {
@@ -46,17 +52,44 @@ async function fetchWithRetry(url, options = {}, retries = 2) {
   throw lastErr;
 }
 
-// ---------- 字幕缓存 ----------
+// ---------- 字幕缓存（内存热缓存 + chrome.storage 持久缓存，MV3 SW 重启不丢失） ----------
+const STORAGE_CACHE_KEY = "subtitleCache";
 const subtitleCache = new Map();
 const CACHE_TTL = 30 * 60 * 1000;
+const CACHE_MAX = 8; // 持久缓存条数上限（超出按最旧淘汰）
 function cacheKey(bvid, cid) { return bvid + ":" + cid; }
-function getCache(bvid, cid) {
-  const item = subtitleCache.get(cacheKey(bvid, cid));
-  if (item && Date.now() - item.fetchedAt < CACHE_TTL) return item.tracks;
+
+async function getCache(bvid, cid) {
+  const k = cacheKey(bvid, cid);
+  const mem = subtitleCache.get(k);
+  if (mem && Date.now() - mem.fetchedAt < CACHE_TTL) return mem.tracks;
+  try {
+    const store = await chrome.storage.local.get(STORAGE_CACHE_KEY);
+    const obj = store[STORAGE_CACHE_KEY] || {};
+    const item = obj[k];
+    if (item && Date.now() - item.fetchedAt < CACHE_TTL) {
+      subtitleCache.set(k, item); // 回填热缓存
+      return item.tracks;
+    }
+  } catch (_) { /* ignore */ }
   return null;
 }
-function setCache(bvid, cid, tracks) {
-  subtitleCache.set(cacheKey(bvid, cid), { tracks, fetchedAt: Date.now() });
+
+async function setCache(bvid, cid, tracks) {
+  const k = cacheKey(bvid, cid);
+  const item = { tracks, fetchedAt: Date.now() };
+  subtitleCache.set(k, item);
+  try {
+    const store = await chrome.storage.local.get(STORAGE_CACHE_KEY);
+    const obj = store[STORAGE_CACHE_KEY] || {};
+    obj[k] = item;
+    const keys = Object.keys(obj);
+    if (keys.length > CACHE_MAX) {
+      keys.sort((a, b) => (obj[a].fetchedAt || 0) - (obj[b].fetchedAt || 0));
+      keys.slice(0, keys.length - CACHE_MAX).forEach(dk => { delete obj[dk]; });
+    }
+    await chrome.storage.local.set({ [STORAGE_CACHE_KEY]: obj });
+  } catch (_) { /* ignore */ }
 }
 
 // ---------- wbi 密钥（缓存 1 天） ----------
@@ -186,7 +219,7 @@ async function handleGetSubtitles(msg) {
   const cacheKeyStr = cidNum ? cacheKey(bvid, cidNum) : null;
 
   if (cacheKeyStr) {
-    const cached = getCache(bvid, cidNum);
+    const cached = await getCache(bvid, cidNum);
     if (cached) return { ok: true, fromCache: true, tracks: cached, cid: cidNum };
   }
 
@@ -195,7 +228,7 @@ async function handleGetSubtitles(msg) {
     const cookieHeader = await getBiliCookieHeader();
     const results = await Promise.all(list.map(t => fetchSubtitleTrack(t, cookieHeader, bvid)));
     const tracks = results.filter(Boolean);
-    if (cidNum) setCache(bvid, cidNum, tracks);
+    if (cidNum) await setCache(bvid, cidNum, tracks);
     return { ok: true, fromCache: false, tracks, cid: cidNum, p: msg.p || null };
   } catch (e) {
     return { ok: false, error: (e && e.message) ? e.message : String(e) };
@@ -276,20 +309,14 @@ async function handleAiChat(msg) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split("\n");
-      buffer = parts.pop();
-      for (const line of parts) {
-        const l = line.trim();
-        if (!l.startsWith("data:")) continue;
-        const data = l.slice(5).trim();
-        if (data === "[DONE]") continue;
-        try {
-          const j = JSON.parse(data);
-          const delta = j.choices && j.choices[0] && j.choices[0].delta;
-          if (delta && delta.reasoning_content) emit({ reasoning: delta.reasoning_content });
-          if (delta && delta.content) emit({ delta: delta.content });
-        } catch (_) { /* 忽略不完整块 */ }
+      const r = SseLib.feedBuffer(buffer, decoder.decode(value, { stream: true }));
+      buffer = r.buffer;
+      for (const line of r.lines) {
+        const p = SseLib.parseLine(line);
+        if (!p) continue;
+        if (p.done) break;
+        if (p.reasoning) emit({ reasoning: p.reasoning });
+        if (p.delta) emit({ delta: p.delta });
       }
     }
     emit({ done: true });
