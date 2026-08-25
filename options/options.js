@@ -5,6 +5,9 @@
     apiKey: "",
     model: "deepseek-chat",
     reasoningLevel: 0,
+    visionBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    visionApiKey: "",
+    visionModel: "qwen-vl-plus",
     temperature: 0.7,
     systemPrompt: "你是专业的视频内容分析助手。你只基于用户提供的视频字幕进行总结、提炼、翻译与问答。回答使用与问题相同的语言，表达简洁、结构清晰。"
   };
@@ -24,6 +27,9 @@
     $("#apiKey").value = s.apiKey;
     $("#model").value = s.model;
     $("#reasoningLevel").value = String(s.reasoningLevel);
+    $("#visionBaseUrl").value = s.visionBaseUrl;
+    $("#visionApiKey").value = s.visionApiKey;
+    $("#visionModel").value = s.visionModel;
     $("#temperature").value = String(s.temperature);
     $("#systemPrompt").value = s.systemPrompt;
   }
@@ -34,6 +40,9 @@
       apiKey: $("#apiKey").value.trim(),
       model: $("#model").value.trim() || DEFAULT.model,
       reasoningLevel: Number($("#reasoningLevel").value) === 1 ? 1 : 0,
+      visionBaseUrl: $("#visionBaseUrl").value.trim() || "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      visionApiKey: $("#visionApiKey").value.trim(),
+      visionModel: $("#visionModel").value.trim() || "qwen-vl-plus",
       temperature: Math.min(2, Math.max(0, Number($("#temperature").value) || 0.7)),
       systemPrompt: $("#systemPrompt").value.trim() || DEFAULT.systemPrompt
     };

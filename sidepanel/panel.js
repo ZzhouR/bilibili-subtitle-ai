@@ -17,6 +17,13 @@
   const ctxText = $("#ctxText");
   const resizer = $("#subResizer");
   const md = window.MarkdownLib;
+  const summaryView = $("#summaryView");
+  const summaryStatus = $("#summaryStatus");
+  const summaryBar = $("#summaryBar");
+  const summarySegs = $("#summarySegs");
+  const summaryResult = $("#summaryResult");
+  const summaryBtn = $("#summaryBtn");
+  const summaryStopBtn = $("#summaryStopBtn");
 
   let tracks = [];
   let activeIndex = -1;
@@ -349,6 +356,179 @@
 
   function showStop(show) { stopBtn.hidden = !show; }
 
+  // ---------- AI 总结（画面识别 + 字幕分段 + 结构化汇总） ----------
+  let summaryRunning = false;
+  let summaryCancelled = false;
+  let summaryCards = [];
+  let summaryStarted = false;
+
+  function buildSegments(lines, segLen) {
+    const segs = [];
+    if (!lines.length) return segs;
+    const end = lines[lines.length - 1].end || 0;
+    for (let t = 0; t < end; t += segLen) {
+      segs.push({ start: t, end: Math.min(t + segLen, end), lines: [] });
+    }
+    if (!segs.length) segs.push({ start: 0, end: end, lines: [] });
+    lines.forEach(l => {
+      const idx = Math.max(0, Math.min(Math.floor(l.start / segLen), segs.length - 1));
+      if (segs[idx]) segs[idx].lines.push(l);
+    });
+    return segs;
+  }
+
+  function updateSummaryProgress(text, pct) {
+    summaryStatus.textContent = text;
+    if (pct != null) summaryBar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  }
+
+  function renderSegCard(card, idx) {
+    const div = document.createElement("div");
+    div.className = "s-seg";
+    const head = document.createElement("div");
+    head.className = "s-seg-head";
+    head.textContent = "第 " + (idx + 1) + " 段 · " + fmt(card.start) + " – " + fmt(card.end);
+    div.appendChild(head);
+    if (card.image) {
+      const img = document.createElement("img");
+      img.src = card.image;
+      img.alt = "画面截图";
+      div.appendChild(img);
+    }
+    if (card.vision) {
+      const v = document.createElement("div");
+      v.className = "s-vision";
+      v.innerHTML = md.mdToHtml(card.vision);
+      div.appendChild(v);
+    }
+    if (card.subtitle) {
+      const s = document.createElement("div");
+      s.className = "s-sub";
+      s.textContent = card.subtitle;
+      div.appendChild(s);
+    }
+    return div;
+  }
+
+  async function runSummaryChat(contextText) {
+    const id = "sum" + (++streamSeq);
+    const box = document.createElement("div");
+    box.className = "s-seg";
+    const head = document.createElement("div");
+    head.className = "s-seg-head";
+    head.textContent = "📄 视频 AI 总结";
+    box.appendChild(head);
+    const body = document.createElement("div");
+    body.className = "md-body";
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    body.appendChild(caret);
+    box.appendChild(body);
+    summaryResult.appendChild(box);
+    let fullText = "";
+    const handler = m => {
+      if (!m || m.type !== "AI_STREAM" || m.id !== id) return;
+      if (m.error) { caret.remove(); body.textContent = "⚠ " + m.error; return; }
+      if (m.done) { caret.remove(); body.innerHTML = md.mdToHtml(fullText); return; }
+      if (m.delta) {
+        fullText += m.delta;
+        body.innerHTML = md.mdToHtml(fullText);
+        body.appendChild(caret);
+        summaryResult.scrollTop = summaryResult.scrollHeight;
+      }
+    };
+    chrome.runtime.onMessage.addListener(handler);
+    try {
+      await chrome.runtime.sendMessage({
+        type: "AI_CHAT", id,
+        messages: [{
+          role: "user",
+          content: "你是一名资深课程助教。请基于以下【画面识别结果】与【视频字幕】，生成非常详细的结构化学习总结。要求：\n" +
+            "1. 开头给出视频主题与学习目标；\n" +
+            "2. 按讲授顺序列出【题目原文】【解题思路分析】【分步解答过程】【重点公式】，公式用 $...$ 或 $$...$$ 输出 LaTeX；\n" +
+            "3. 若有画面识别结果，逐题对照板书；若画面识别失败，也基于字幕尽力还原；\n" +
+            "4. 全部使用中文，步骤尽可能详细，可直接用于复习。\n\n" + contextText
+        }],
+        stream: true
+      });
+    } catch (e) {
+      caret.remove();
+      body.textContent = "⚠ " + (e.message || e);
+    } finally {
+      chrome.runtime.onMessage.removeListener(handler);
+    }
+  }
+
+  async function startSummary() {
+    if (summaryRunning) return;
+    const tab = await getActiveTab();
+    if (!tab) { updateSummaryProgress("未找到当前标签页", 0); return; }
+    const lines = currentLines();
+    if (!lines.length) { updateSummaryProgress("当前视频无字幕，无法总结", 0); return; }
+    const store = await chrome.storage.local.get("aiSettings");
+    const settings = store.aiSettings || {};
+    const visionReady = !!settings.visionApiKey;
+    const segLen = Math.max(30, Number($("#segLen").value) || 120);
+    const segs = buildSegments(lines, segLen);
+    summaryRunning = true;
+    summaryCancelled = false;
+    summaryCards = [];
+    summarySegs.innerHTML = "";
+    summaryResult.innerHTML = "";
+    summaryStopBtn.hidden = false;
+    summaryBtn.disabled = true;
+    updateSummaryProgress("开始总结：共 " + segs.length + " 段" + (visionReady ? "（含画面识别）" : "（未配置视觉模型，仅字幕）"), 0);
+    try {
+      for (let i = 0; i < segs.length; i++) {
+        if (summaryCancelled) break;
+        const seg = segs[i];
+        const shotTime = seg.start + (seg.end - seg.start) * 0.15;
+        updateSummaryProgress("分段 " + (i + 1) + "/" + segs.length + "：截取画面…", (i / segs.length) * 100);
+        let image = "";
+        let visionText = "";
+        if (visionReady) {
+          const cap = await chrome.runtime.sendMessage({ type: "CAPTURE_FRAME", tabId: tab.id, time: shotTime });
+          if (summaryCancelled) break;
+          if (cap && cap.ok) {
+            image = cap.image;
+            updateSummaryProgress("分段 " + (i + 1) + "/" + segs.length + "：识别画面…", (i / segs.length) * 100);
+            const v = await chrome.runtime.sendMessage({ type: "AI_VISION", image });
+            visionText = v && v.ok ? v.content : (v && v.error ? "⚠ 识别失败：" + v.error : "");
+          } else if (cap && cap.error) {
+            visionText = "⚠ 截图失败：" + cap.error;
+          }
+        }
+        const card = { start: seg.start, end: seg.end, image, vision: visionText, subtitle: seg.lines.map(l => "[" + fmt(l.start) + "] " + l.text).join("\n") };
+        summaryCards.push(card);
+        summarySegs.appendChild(renderSegCard(card, i));
+        updateSummaryProgress("已处理 " + (i + 1) + "/" + segs.length + " 段", ((i + 1) / segs.length) * 100);
+      }
+      if (!summaryCancelled) {
+        updateSummaryProgress("正在生成结构化总结（可能耗时 1~3 分钟）…", 100);
+        const parts = summaryCards.map((c, i) =>
+          "【第" + (i + 1) + "段 " + fmt(c.start) + "–" + fmt(c.end) + "】\n" +
+          (c.vision ? "画面识别：" + c.vision + "\n" : "") +
+          "字幕：\n" + c.subtitle
+        ).join("\n\n");
+        await runSummaryChat(parts);
+        updateSummaryProgress("✅ 总结完成", 100);
+      } else {
+        updateSummaryProgress("已取消", 0);
+      }
+    } catch (e) {
+      updateSummaryProgress("总结失败：" + (e.message || e), 0);
+    } finally {
+      summaryRunning = false;
+      summaryStopBtn.hidden = true;
+      summaryBtn.disabled = false;
+    }
+  }
+
+  function stopSummary() {
+    summaryCancelled = true;
+    updateSummaryProgress("正在取消…");
+  }
+
   // ---------- 历史载入 ----------
   async function openRecord(id) {
     const list = await loadHistory();
@@ -461,6 +641,27 @@
       chrome.runtime.sendMessage({ type: "AI_STOP", id: currentStreamId }).catch(() => {});
     }
   });
+
+  // ---------- Tab 切换（字幕对话 / AI 总结） ----------
+  document.querySelectorAll(".p-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".p-tab").forEach(b => b.classList.toggle("active", b === btn));
+      const tab = btn.dataset.tab;
+      mainView.hidden = tab !== "chat";
+      summaryView.hidden = tab !== "summary";
+      if (tab === "summary" && !summaryStarted) {
+        summaryStarted = true;
+        chrome.storage.local.get("aiSettings").then(store => {
+          const s = store.aiSettings || {};
+          updateSummaryProgress(s.visionApiKey
+            ? "就绪：视觉模型 " + (s.visionModel || "qwen-vl-plus") + "（分段画面将被识别）"
+            : "未配置视觉模型（设置页-视觉模型），总结仅基于字幕", 0);
+        });
+      }
+    });
+  });
+  summaryBtn.addEventListener("click", startSummary);
+  summaryStopBtn.addEventListener("click", stopSummary);
 
   $("#historyBtn").addEventListener("click", openHistoryWindow);
   $("#newChatBtn").addEventListener("click", () => {

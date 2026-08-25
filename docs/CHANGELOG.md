@@ -1,5 +1,13 @@
 # 变更日志（CHANGELOG）
 
+## [0.8.0] - 2025（AI 视频总结）
+### 新增
+- **AI 总结（画面 + 字幕融合）**：侧边栏「🤖 AI 总结」标签页；分段截图 → 视觉模型识别公式/板书 → 与字幕一起生成结构化总结（主题/题目原文/解题思路/分步解答/重点公式）。
+- **帧采集链路**：content `SEEK_VIDEO` → background `CAPTURE_FRAME`（captureVisibleTab + OffscreenCanvas 裁剪，≤1024px）。
+- **视觉模型配置**：设置页独立配置（默认通义 qwen-vl-plus，兼容 GLM-4V / Ollama）；未配置仅做字幕总结。
+- **迷你 LaTeX 渲染**：`lib/latex.js`（希腊字母/分数/根号/上下标/矩阵/符号，词边界替换 + 转义防护）；markdown 集成 `$...$`/`$$...$$`。
+- manifest 新增 `activeTab`。
+
 ## [0.7.2] - 2025
 ### 修复（多标签页切换字幕不刷新/报错）
 - **实时跟随当前活动标签页**：移除 `activeTabId` 缓存，每次加载/跳转实时 `chrome.tabs.query` 获取当前标签页；从任意 B 站视频标签切换到另一个视频标签，侧边栏立即显示新标签的字幕。

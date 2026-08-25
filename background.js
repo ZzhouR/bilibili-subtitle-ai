@@ -209,6 +209,9 @@ const DEFAULT_SETTINGS = {
   model: "deepseek-chat",
   reasoningLevel: 0,               // 0=普通 1=深度思考
   reasoningModel: "deepseek-reasoner",
+  visionBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  visionApiKey: "",
+  visionModel: "qwen-vl-plus",
   temperature: 0.7,
   systemPrompt: "你是专业的视频内容分析助手。你只基于用户提供的视频字幕进行总结、提炼、翻译与问答。回答使用与问题相同的语言，表达简洁、结构清晰。"
 };
@@ -302,6 +305,89 @@ async function handleAiChat(msg) {
   }
 }
 
+// ---------- AI 总结：视频帧采集 + 视觉识别 ----------
+function bufToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+// 截图 → 裁剪视频区域 → 压缩到 ≤1024px → dataURL
+async function handleCaptureFrame(msg) {
+  const { tabId, time } = msg;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const seed = await chrome.tabs.sendMessage(tabId, { type: "SEEK_VIDEO", time });
+    if (!seed || !seed.ok || !seed.rect) {
+      return { ok: false, error: "无法定位视频画面（播放器未就绪？）" };
+    }
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 82 });
+    const blob = await (await fetch(dataUrl)).blob();
+    const bmp = await createImageBitmap(blob);
+    const scale = bmp.width / (seed.viewWidth || bmp.width);
+    const sx = Math.max(0, Math.round(seed.rect.left * scale));
+    const sy = Math.max(0, Math.round(seed.rect.top * scale));
+    const sw = Math.max(1, Math.min(bmp.width - sx, Math.round(seed.rect.width * scale)));
+    const sh = Math.max(1, Math.min(bmp.height - sy, Math.round(seed.rect.height * scale)));
+    const maxEdge = 1024;
+    const ratio = Math.min(1, maxEdge / Math.max(sw, sh));
+    const ow = Math.max(1, Math.round(sw * ratio));
+    const oh = Math.max(1, Math.round(sh * ratio));
+    const canvas = new OffscreenCanvas(ow, oh);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, ow, oh);
+    const outBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+    const buf = await outBlob.arrayBuffer();
+    return { ok: true, image: "data:image/jpeg;base64," + bufToBase64(buf), size: ow + "x" + oh };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  }
+}
+
+// 视觉识别（OpenAI 兼容 vision 接口，独立配置）
+const VISION_PROMPT = "你是课程板书/屏幕识别助手。识别这张教学画面中的数学公式与关键文字：" +
+  "公式一律用 LaTeX 输出（行内 $...$、块级 $$...$$）；说明性文字用中文简述。" +
+  "输出格式：先列出画面中的公式，再简要说明画面的讲解主题。若画面无有效内容，输出“（无有效画面内容）”。";
+
+async function handleAiVision(msg) {
+  const settings = await getSettings();
+  if (!settings.visionApiKey) return { ok: false, error: "未配置视觉模型 API Key（设置页-视觉模型）" };
+  const baseUrl = (settings.visionBaseUrl || "").replace(/\/+$/, "");
+  const url = baseUrl + "/chat/completions";
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + settings.visionApiKey
+      },
+      body: JSON.stringify({
+        model: settings.visionModel || "qwen-vl-plus",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: msg.prompt || VISION_PROMPT },
+            { type: "image_url", image_url: { url: msg.image } }
+          ]
+        }],
+        temperature: 0.2
+      })
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, error: "视觉接口 HTTP " + res.status + ": " + text.slice(0, 200) };
+    }
+    const json = await res.json();
+    const content = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
+    return { ok: true, content: content || "" };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  }
+}
+
 async function handleAiTest() {
   const settings = await getSettings();
   if (!settings.apiKey) return { ok: false, error: "未配置 API Key" };
@@ -348,6 +434,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       case "AI_TEST":
         return await handleAiTest();
+      case "CAPTURE_FRAME":
+        return await handleCaptureFrame(msg);
+      case "AI_VISION":
+        return await handleAiVision(msg);
       default:
         return { ok: false, error: "未知消息类型: " + msg.type };
     }

@@ -100,6 +100,37 @@
       sendResponse({ ok: true });
       return;
     }
+    // AI 总结：暂停→seek 到目标时间→画面稳定后返回视频元素位置（供后台截图裁剪）
+    if (msg.type === "SEEK_VIDEO") {
+      const v = findVideo();
+      if (!v || typeof msg.time !== "number" || !isFinite(msg.time)) {
+        sendResponse({ ok: false, error: "video 不可用" });
+        return;
+      }
+      const wasPlaying = !v.paused;
+      try { v.pause(); } catch (_) { /* ignore */ }
+      const dur = v.duration && isFinite(v.duration) ? v.duration : msg.time;
+      v.currentTime = Math.max(0, Math.min(msg.time, dur));
+      const settled = new Promise(resolve => {
+        let done = false;
+        const fin = () => { if (!done) { done = true; resolve(); } };
+        const tm = setTimeout(fin, 1500);
+        v.addEventListener("seeked", () => { clearTimeout(tm); fin(); }, { once: true });
+      });
+      settled.then(() => {
+        setTimeout(() => {
+          const r = v.getBoundingClientRect();
+          sendResponse({
+            ok: true,
+            rect: { left: r.left, top: r.top, width: r.width, height: r.height },
+            viewWidth: window.innerWidth,
+            viewHeight: window.innerHeight,
+          });
+          if (wasPlaying) { try { v.play().catch(() => {}); } catch (_) { /* ignore */ } }
+        }, 350);
+      });
+      return; // 异步响应
+    }
   });
 
   // 定时找 video（播放器延迟挂载）

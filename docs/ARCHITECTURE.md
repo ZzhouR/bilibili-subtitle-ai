@@ -28,7 +28,8 @@
 | `lib/wbi.js` | 纯函数：MD5、wbi 签名（`encWbi`）、字幕解析（`parseTs`/`normalizeBody`） | 无 DOM/Chrome 依赖，可被 SW importScripts 与 node require |
 | `background.js` | 唯一访问网络/密钥的模块；消息路由；缓存（字幕 30min、wbi 密钥 1d、cid 内存缓存） | API Key 永不进入页面上下文 |
 | `content/extractor.js` | 识别视频页 bvid/cid，请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析）；失败自动重试 2 次（3s 间隔） |
-| `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME` | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI |
+| `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME`；AI 总结 `SEEK_VIDEO`（暂停→seek→返回视频位置） | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI |
+| `lib/latex.js` | 零依赖迷你 LaTeX→HTML 渲染器（希腊字母/分数/根号/上下标/矩阵/符号） | 词边界命令替换 + HTML 转义安全 |
 | `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库） | 与浮动面板互斥显示（并入机制） |
 | `history/` | 对话历史管理独立窗口：搜索/查看/重命名/删除/载入侧边栏续聊 | 与侧边栏经 `pendingOpenRecord` + 消息协作 |
 | `options/` | AI 服务配置，存 `chrome.storage.local` 的 `aiSettings` | 支持测试连接（GET /models） |
@@ -47,6 +48,8 @@
 | history 窗口 → 侧边栏 | `LOAD_HISTORY_TO_PANEL` | `{id}` | –（侧边栏载入该历史对话） |
 | content → background → 扩展页 | `SUBTITLES_READY` | `{bvid}` | –（新字幕就绪，侧边栏拉取最新字幕） |
 | content → background → 扩展页 | `SUBTITLES_ERROR` | `{error}` | –（新字幕获取失败，侧边栏刷新状态） |
+| panel → background | `CAPTURE_FRAME` | `{tabId, time}` | `{ok, image}` 或 `{ok:false,error}`（截图+裁剪） |
+| panel → background | `AI_VISION` | `{image, prompt?}` | `{ok, content}`（视觉模型识别） |
 | panel → background | `AI_CHAT` | `{id, messages[], stream}` | 异步：`AI_STREAM` 广播 + 最终 `{ok,streamed}` |
 | background → 所有扩展页 | `AI_STREAM` | `{id, delta\|done\|error}` | – |
 | panel/popup → background | `AI_STOP` / `AI_TEST` / `PING` | `{id?}` / – / – | `{ok}` / `{ok,models}` / `{ok,version}` |

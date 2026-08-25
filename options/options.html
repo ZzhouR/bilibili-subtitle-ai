@@ -75,6 +75,18 @@ button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
     <textarea id="systemPrompt"></textarea>
   </div>
 
+  <div class="card">
+    <h2>🖼️ 视觉模型（AI 总结画面识别）</h2>
+    <div class="hint">用于识别课程截图中的数学公式/板书，OpenAI 兼容 vision 接口。不配置时 AI 总结仅基于字幕。</div>
+    <label for="visionBaseUrl">Base URL（视觉）</label>
+    <input type="text" id="visionBaseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+    <div class="hint">如通义 qwen-vl（上例）、智谱 GLM-4V：https://open.bigmodel.cn/api/paas/v4、本地 Ollama：http://127.0.0.1:11434/v1</div>
+    <label for="visionApiKey">API Key（视觉）</label>
+    <input type="password" id="visionApiKey" placeholder="sk-...">
+    <label for="visionModel">模型（视觉）</label>
+    <input type="text" id="visionModel" placeholder="qwen-vl-plus">
+  </div>
+
   <div class="actions">
     <button id="saveBtn">保存设置</button>
     <button class="secondary" id="testBtn">测试连接（获取模型列表）</button>

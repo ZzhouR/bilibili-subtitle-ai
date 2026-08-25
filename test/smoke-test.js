@@ -87,12 +87,12 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.7.2", manifest.version, "0.7.2");
-ok("权限含 storage/cookies/sidePanel", ["storage", "cookies", "sidePanel"].every(p => manifest.permissions.includes(p)));
+eq("版本号为 0.8.0", manifest.version, "0.8.0");
+ok("权限含 storage/cookies/sidePanel/activeTab", ["storage", "cookies", "sidePanel", "activeTab"].every(p => manifest.permissions.includes(p)));
 
 console.log("-- 关键链路存在性");
 const bg = fs.readFileSync(path.join(ROOT, "background.js"), "utf8");
-['importScripts("lib/wbi.js")', "BiliLib.encWbi", "x/player/wbi/v2", "x/player/v2", "x/web-interface/view", "resolveCid", "GET_SUBTITLES", "AI_CHAT", "AI_STOP", "AI_TEST", "chrome.cookies.getAll", "getReader", "VIDEO_CHANGED", "SUBTITLES_READY", "SUBTITLES_ERROR", "reasoning_content", "reasoningLevel", "reasoningModel"].forEach(k => ok("background 包含 " + k, bg.includes(k)));
+['importScripts("lib/wbi.js")', "BiliLib.encWbi", "x/player/wbi/v2", "x/player/v2", "x/web-interface/view", "resolveCid", "GET_SUBTITLES", "AI_CHAT", "AI_STOP", "AI_TEST", "chrome.cookies.getAll", "getReader", "VIDEO_CHANGED", "SUBTITLES_READY", "SUBTITLES_ERROR", "reasoning_content", "reasoningLevel", "reasoningModel", "CAPTURE_FRAME", "AI_VISION", "OffscreenCanvas", "createImageBitmap", "visionModel"].forEach(k => ok("background 包含 " + k, bg.includes(k)));
 const extractor = fs.readFileSync(path.join(ROOT, "content/extractor.js"), "utf8");
 ok("extractor 允许 cid 为空（携带 p）", extractor.includes("return { bvid, cid, p }"));
 ok("extractor 有自动重试", extractor.includes("setTimeout(requestSubtitles, 3000)"));
@@ -101,11 +101,12 @@ ok("extractor 四通道 URL 检测", extractor.includes("pushState") && extracto
 ok("extractor 分P解析 p", extractor.includes("URLSearchParams") && extractor.includes("pages"));
 ok("extractor 字幕就绪通知", extractor.includes("SUBTITLES_READY"));
 const view = fs.readFileSync(path.join(ROOT, "content/subtitle-view.js"), "utf8");
-["GET_CURRENT_SUBTITLES", "JUMP_TO_TIME", "PLAYBACK_HIGHLIGHT", "broadcastHighlight", "findIndex", "VIDEO_CHANGED"].forEach(k => ok("view.js 包含 " + k, view.includes(k)));
+["GET_CURRENT_SUBTITLES", "JUMP_TO_TIME", "PLAYBACK_HIGHLIGHT", "broadcastHighlight", "findIndex", "VIDEO_CHANGED", "SEEK_VIDEO"].forEach(k => ok("view.js 包含 " + k, view.includes(k)));
 ok("view.js 已无浮动面板 UI（bili-sub-ai-panel 移除）", !view.includes("bili-sub-ai-panel") && !view.includes("bili-sub-ai-float"));
 const panel = fs.readFileSync(path.join(ROOT, "sidepanel/panel.js"), "utf8");
 ["GET_CURRENT_SUBTITLES", "AI_STREAM", "AI_STOP", "subResizer", "--subtitle-h", "PLAYBACK_HIGHLIGHT", "VIDEO_CHANGED", "chatHistory", "sendUserMessage", "【视频字幕知识库】", "historyBtn", "openHistoryWindow", "LOAD_HISTORY_TO_PANEL", "pendingOpenRecord", "mdToHtml", "JUMP_TO_TIME", "nowLine", "reasoning"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 ["SUBTITLES_READY", "SUBTITLES_ERROR", "videoSwitchTimer"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
+["startSummary", "CAPTURE_FRAME", "AI_VISION", "summaryView", "buildSegments", "runSummaryChat"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 ok("panel.js 标签页切换监听", panel.includes("chrome.tabs.onActivated") && panel.includes("chrome.tabs.onUpdated"));
 ok("panel.js 实时跟随（无标签缓存）", !panel.includes("activeTabId") && panel.includes("subLoadSeq"));
 ok("panel.js 已移除 SIDEPANEL_STATE 逻辑", !panel.includes("SIDEPANEL_STATE"));
@@ -116,8 +117,13 @@ ok("history.css 存在", fs.existsSync(path.join(ROOT, "history/history.css")));
 
 const panelHtml = fs.readFileSync(path.join(ROOT, "sidepanel/panel.html"), "utf8");
 ok("panel.html 含拖拽分隔条", panelHtml.includes("p-resizer"));
+ok("panel.html 含 AI 总结页与 latex 引入", panelHtml.includes("summaryView") && panelHtml.includes("../lib/latex.js") && panelHtml.includes("p-tab"));
+const latexJs = fs.readFileSync(path.join(ROOT, "lib/latex.js"), "utf8");
+["latexToHtml", "GREEK", "lmatrix"].forEach(k => ok("latex.js 包含 " + k, latexJs.includes(k)));
 ok("panel.html 含历史入口按钮且无内嵌历史视图", panelHtml.includes("historyBtn") && !panelHtml.includes("historyView"));
-["ARCHITECTURE.md", "DECISIONS.md", "CHANGELOG.md"].forEach(k => ok("docs/" + k + " 存在", fs.existsSync(path.join(ROOT, "docs", k))));
+["ARCHITECTURE.md", "DECISIONS.md", "CHANGELOG.md", "FEATURE-AI-SUMMARY.md"].forEach(k => ok("docs/" + k + " 存在", fs.existsSync(path.join(ROOT, "docs", k))));
+const optsJs = fs.readFileSync(path.join(ROOT, "options/options.js"), "utf8");
+["visionBaseUrl", "visionApiKey", "visionModel"].forEach(k => ok("options.js 包含 " + k, optsJs.includes(k)));
 
 console.log("\n结果: " + pass + " 通过, " + fail + " 失败");
 process.exit(fail ? 1 : 0);
