@@ -41,7 +41,7 @@ button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
 <body>
 <div class="wrap">
   <h1>B站字幕 AI 助手设置</h1>
-  <div class="sub">AI 服务使用 OpenAI 兼容接口（默认 DeepSeek）。API Key 仅保存在本地浏览器中。</div>
+  <div class="sub">AI 服务使用 OpenAI 兼容接口（默认 DeepSeek deepseek-v4-flash）。API Key 仅保存在本地浏览器中。</div>
 
   <div class="card">
     <h2>🤖 AI 服务</h2>
@@ -56,20 +56,34 @@ button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
     <div class="row">
       <div>
         <label for="model">模型</label>
-        <input type="text" id="model" placeholder="deepseek-chat">
+        <input type="text" id="model" placeholder="deepseek-v4-flash" list="modelPresets">
+        <datalist id="modelPresets">
+          <option value="deepseek-v4-flash">deepseek-v4-flash（快，默认）</option>
+          <option value="deepseek-v4-pro">deepseek-v4-pro（更强）</option>
+        </datalist>
       </div>
       <div>
         <label for="temperature">温度（0 ~ 2）</label>
         <input type="number" id="temperature" min="0" max="2" step="0.1">
       </div>
     </div>
+    <div class="hint">DeepSeek 现行模型：<code>deepseek-v4-flash</code> / <code>deepseek-v4-pro</code>。旧的 deepseek-chat、deepseek-reasoner 已下线，保存时会自动改写为 deepseek-v4-flash。</div>
 
-    <label for="reasoningLevel">思考等级</label>
-    <select id="reasoningLevel">
-      <option value="0">普通（deepseek-chat，快速回答）</option>
-      <option value="1">深度思考（deepseek-reasoner，先展示思考过程）</option>
+    <label for="reasoningEffort">思考等级（reasoning_effort）</label>
+    <select id="reasoningEffort">
+      <option value="off">关闭思考（thinking: disabled，最快）</option>
+      <option value="low">low —— 低强度思考</option>
+      <option value="medium">medium —— 中（DeepSeek 实际按 high 执行）</option>
+      <option value="high">high —— 高（默认）</option>
+      <option value="xhigh">xhigh —— 超高（DeepSeek 实际按 high 执行）</option>
+      <option value="max">max —— 最大强度，最慢最严谨</option>
     </select>
-    <div class="hint">深度思考使用推理模型，回答前会输出思考过程（reasoning_content），响应更慢但更严谨</div>
+    <div class="kv" id="effortState"></div>
+    <div class="hint">
+      与 agent 一致的六档分级：<b>关闭 / low / medium / high / xhigh / max</b>。开启后模型先输出思考过程（<code>reasoning_content</code>），侧边栏以灰框展示，再给正式回答。<br>
+      DeepSeek 的实际映射：low→low，medium/high/xhigh→high，max→max；即在 DeepSeek 上真正有区别的是 <b>low / high / max</b> 三档。<br>
+      ⚠️ 思考模式下 <code>temperature</code> 无效（官方文档明示），因此开启思考时不会发送该参数。
+    </div>
 
     <label for="systemPrompt">系统提示词</label>
     <textarea id="systemPrompt"></textarea>
@@ -81,11 +95,15 @@ button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
     <div class="hint">用于识别课程截图中的数学公式/板书，OpenAI 兼容 vision 接口。不配置时「📸 截图总结」无法使用。截图本身<b>不需要额外权限</b>（直接读取播放器视频帧）。</div>
     <label for="visionBaseUrl">Base URL（视觉）</label>
     <input type="text" id="visionBaseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
-    <div class="hint">如通义 qwen-vl（上例）、智谱 GLM-4V：https://open.bigmodel.cn/api/paas/v4、本地 Ollama：http://127.0.0.1:11434/v1</div>
+    <div class="hint">如通义 qwen-vl（上例）、智谱 GLM-4V：https://open.bigmodel.cn/api/paas/v4、本地 Ollama：http://127.0.0.1:11434/v1；也可用 DeepSeek 实验性视觉模型：Base URL 填 https://api.deepseek.com，模型填 deepseek-v4-flash-vision-exp</div>
     <label for="visionApiKey">API Key（视觉）</label>
     <input type="password" id="visionApiKey" placeholder="sk-...">
     <label for="visionModel">模型（视觉）</label>
-    <input type="text" id="visionModel" placeholder="qwen-vl-plus">
+    <input type="text" id="visionModel" placeholder="qwen-vl-plus" list="visionPresets">
+    <datalist id="visionPresets">
+      <option value="qwen-vl-plus">qwen-vl-plus（通义，默认）</option>
+      <option value="deepseek-v4-flash-vision-exp">deepseek-v4-flash-vision-exp（DeepSeek 实验性）</option>
+    </datalist>
 
     <h2 style="margin-top:18px;">📷 截图兜底权限（可选）</h2>
     <div class="hint">截图默认直接从播放器读取视频帧，<b>无需任何额外权限</b>。仅当遇到"视频帧被跨域保护"时，才需要授权整页截图作为兜底。</div>
@@ -103,6 +121,7 @@ button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
   <div id="status"></div>
   <div class="kv" id="modelList"></div>
 </div>
+<script src="../lib/settings.js"></script>
 <script src="options.js"></script>
 </body>
 </html>

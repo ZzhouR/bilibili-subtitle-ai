@@ -1,6 +1,6 @@
 // B站字幕 AI 助手 - 侧边栏（v0.7.0）
 // 字幕展示/同步滚动/点击跳转/当前句条全部在此；浮动面板已移除。
-// AI 对话：自动知识库、流式（含 depth-reasoner 思考过程）、Markdown 渲染、历史记录。
+// AI 对话：自动知识库、流式（含思考过程 reasoning_content）、Markdown 渲染、历史记录。
 (() => {
   const $ = sel => document.querySelector(sel);
   const statusEl = $("#status");

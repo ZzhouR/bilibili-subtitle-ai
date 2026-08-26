@@ -44,3 +44,12 @@
 - **决策**：首选在 content script 内 `canvas.drawImage(video)` + `toDataURL` 直接抓帧 —— 视频元素属于同一页面，不需要任何截图权限。仅当画布被跨域污染（`SecurityError`）或抓到全黑帧时，才回退 `captureVisibleTab` + 裁剪，并把 `<all_urls>` 放进 `optional_host_permissions` 由用户在设置页按需授予。
 - **附带收益**：抓到的是视频原生分辨率的纯画面，不含弹幕层与播放器 UI，也不受窗口遮挡/最小化影响；视口缩放不再影响清晰度。
 - **已知陷阱**：硬件加速叠加层下 `drawImage` 可能得到全黑帧。必须抽样检测像素均值（阈值 4）并按 `tainted` 回退，否则会把一张黑图送去视觉识别；`getImageData` 同时充当污染检测（污染时抛 `SecurityError`）。
+
+## D10：思考等级用 reasoning_effort 分级，不再切换模型（0.11.0）
+- **背景**：0.10.x 的「思考等级」只有两档，实现方式是 `reasoningLevel=1` 时把模型名换成 `deepseek-reasoner`。DeepSeek 现行模型已改为 `deepseek-v4-flash` / `deepseek-v4-pro`（另有 `deepseek-v4-flash-vision-exp` 接受图像输入），`deepseek-chat` 与 `deepseek-reasoner` 均已下线；思考能力不再靠换模型，而是同一模型上的两个参数：开关 `thinking: {type: "enabled"|"disabled"}` 与强度 `reasoning_effort`。
+- **决策**：默认模型改为 `deepseek-v4-flash`；设置项 `reasoningLevel`/`reasoningModel` 合并为单一 `reasoningEffort`，取值 `off / low / medium / high / xhigh / max`（与 agent 侧同一套分级），默认 `high`（与官方默认一致）。`off` 发 `thinking: {type:"disabled"}`，其余发 `thinking:{type:"enabled"}` + `reasoning_effort`。
+- **为什么保留 medium/xhigh**：官方映射把 medium 与 xhigh 都折叠到 high（low→low、medium/high/xhigh→high、max→max），实际只有三档生效。但保留六档能与 agent 的分级一一对应，且日后官方细化映射时无需改动配置结构；设置页直接标注实际生效值，避免用户误以为六档都有区别。
+- **temperature**：官方明确思考模式下 `temperature`/`top_p`/`presence_penalty`/`frequency_penalty` 无效（设置不报错但也不生效）。因此开启思考时**不发送** temperature，只在 `off` 时发送 —— 既符合文档，也避免用户以为调了温度却毫无变化。
+- **兼容性**：`thinking` 是 DeepSeek 扩展字段，严格的 OpenAI 端点可能拒绝未知字段。因此只在 Base URL 或模型名含 `deepseek` 时发送该字段；若端点仍回 400 且响应明确抱怨 `thinking`/`reasoning_effort`，则去掉思考参数、补回 temperature 重试一次（只重试一次，且只在明确抱怨这两个字段时，避免把余额不足、鉴权失败之类的 400 也拖进重试）。
+- **迁移**：`lib/settings.js` 的 `migrate()` 在每次读取设置时把旧配置就地转换（`reasoningLevel=1`→`high`，`=0`→`off`；`deepseek-chat`/`deepseek-reasoner`→`deepseek-v4-flash`），设置页保存时删除旧键。老用户升级后无需手动改配置，也不会因为模型已下线而收到 404。
+- **代价**：新增 `lib/settings.js` 一个文件（纯函数，SW / 设置页 / node 测试三处共用），换来的是"默认值与请求体构造只有一份实现"，不再出现 background 与 options 各写一份默认值而漂移的问题。

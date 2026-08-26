@@ -7,6 +7,7 @@ const ROOT = path.join(__dirname, "..");
 const lib = require(path.join(ROOT, "lib/wbi.js"));
 const mdd = require(path.join(ROOT, "lib/markdown.js"));
 const sselib = require(path.join(ROOT, "lib/sse.js"));
+const setlib = require(path.join(ROOT, "lib/settings.js"));
 // markdown 通过 globalThis.LatexLib 取渲染器：必须挂真正的 latex 库（此前误挂 wbi 库，
 // 一旦出现 $...$ 就会因缺少 latexToHtml 抛错）
 global.LatexLib = require(path.join(ROOT, "lib/latex.js"));
@@ -187,6 +188,42 @@ ok("全黑帧被判定为黑", blackScore(0) < 4);
 ok("极暗画面不判黑", !(blackScore(5) < 4));
 ok("正常画面不判黑", !(blackScore(120) < 4));
 
+console.log("-- 模型与思考等级（0.11.0，DeepSeek 思考模式）");
+eq("默认模型为 deepseek-v4-flash", setlib.DEFAULT_SETTINGS.model, "deepseek-v4-flash");
+eq("默认思考等级为 high（与官方默认一致）", setlib.DEFAULT_SETTINGS.reasoningEffort, "high");
+eq("思考等级六档", setlib.EFFORT_LEVELS, ["off", "low", "medium", "high", "xhigh", "max"]);
+// 官方映射表：low→low，medium/high/xhigh→high，max→max（flash 与 pro 相同）
+eq("effort 映射 low", setlib.effectiveEffort("low"), "low");
+eq("effort 映射 medium→high", setlib.effectiveEffort("medium"), "high");
+eq("effort 映射 high", setlib.effectiveEffort("high"), "high");
+eq("effort 映射 xhigh→high", setlib.effectiveEffort("xhigh"), "high");
+eq("effort 映射 max", setlib.effectiveEffort("max"), "max");
+eq("effort off 表示不思考", setlib.effectiveEffort("off"), null);
+eq("非法 effort 回落 high", setlib.normalizeEffort("bogus"), "high");
+eq("effort 大小写归一", setlib.normalizeEffort("MAX"), "max");
+eq("下线模型 deepseek-chat 迁移", setlib.normalizeModel("deepseek-chat"), "deepseek-v4-flash");
+eq("下线模型 deepseek-reasoner 迁移", setlib.normalizeModel("deepseek-reasoner"), "deepseek-v4-flash");
+eq("第三方模型名不被改写", setlib.normalizeModel("gpt-4o-mini"), "gpt-4o-mini");
+eq("旧 reasoningLevel=1 迁移为 high", setlib.migrate({ reasoningLevel: 1 }).reasoningEffort, "high");
+eq("旧 reasoningLevel=0 迁移为 off", setlib.migrate({ reasoningLevel: 0 }).reasoningEffort, "off");
+ok("迁移后不再保留 reasoningLevel/reasoningModel", setlib.migrate({ reasoningLevel: 1, reasoningModel: "deepseek-reasoner" }).reasoningLevel === undefined
+  && setlib.migrate({ reasoningLevel: 1, reasoningModel: "deepseek-reasoner" }).reasoningModel === undefined);
+eq("已有 reasoningEffort 优先于旧字段", setlib.migrate({ reasoningLevel: 0, reasoningEffort: "max" }).reasoningEffort, "max");
+const payMax = setlib.buildChatPayload({ reasoningEffort: "max" }, [{ role: "user", content: "hi" }]);
+eq("payload 带 thinking enabled", payMax.thinking, { type: "enabled" });
+eq("payload 带 reasoning_effort", payMax.reasoning_effort, "max");
+ok("思考模式不发 temperature（官方：该参数无效）", payMax.temperature === undefined);
+const payOff = setlib.buildChatPayload({ reasoningEffort: "off", temperature: 0 }, [], { stream: false });
+eq("关闭思考发 thinking disabled", payOff.thinking, { type: "disabled" });
+eq("关闭思考时 temperature=0 不被吞", payOff.temperature, 0);
+eq("stream:false 透传", payOff.stream, false);
+const payOpenAi = setlib.buildChatPayload({ baseUrl: "https://api.openai.com/v1", model: "gpt-4o", reasoningEffort: "high" }, []);
+ok("非 DeepSeek 端点不发 thinking 字段", payOpenAi.thinking === undefined);
+ok("400 抱怨 thinking 时可识别以便降级", setlib.isThinkingUnsupported("Unrecognized request argument supplied: thinking"));
+ok("普通 400 不误判为思考参数问题", !setlib.isThinkingUnsupported("Insufficient balance"));
+const stripped = setlib.stripThinkingParams(payMax, { temperature: 0.3 });
+ok("降级后去掉思考字段并补回 temperature", stripped.thinking === undefined && stripped.reasoning_effort === undefined && stripped.temperature === 0.3);
+
 console.log("-- manifest 资源完整性");
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
 const refs = [];
@@ -199,7 +236,7 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.10.2", manifest.version, "0.10.2");
+eq("版本号为 0.11.0", manifest.version, "0.11.0");
 ok("权限含 storage/cookies/sidePanel/activeTab", ["storage", "cookies", "sidePanel", "activeTab"].every(p => manifest.permissions.includes(p)));
 ok("host_permissions 含字幕 CDN hdslb", (manifest.host_permissions || []).includes("https://*.hdslb.com/*"));
 const csMatches = (manifest.content_scripts || []).flatMap(cs => cs.js ? cs.matches : []);
@@ -207,7 +244,10 @@ ok("content_scripts 覆盖 /video/ 与 /list/", csMatches.some(m => m.includes("
 
 console.log("-- 关键链路存在性");
 const bg = fs.readFileSync(path.join(ROOT, "background.js"), "utf8");
-['importScripts("lib/wbi.js", "lib/sse.js")', "BiliLib.encWbi", "x/player/wbi/v2", "x/player/v2", "x/web-interface/view", "resolveCid", "GET_SUBTITLES", "AI_CHAT", "AI_STOP", "AI_TEST", "chrome.cookies.getAll", "getReader", "VIDEO_CHANGED", "SUBTITLES_READY", "SUBTITLES_ERROR", "reasoning_content", "reasoningLevel", "reasoningModel", "CAPTURE_FRAME", "AI_VISION", "OffscreenCanvas", "createImageBitmap", "visionModel", "SseLib", "subtitleCache", "HTTP 404"].forEach(k => ok("background 包含 " + k, bg.includes(k)));
+['importScripts("lib/wbi.js", "lib/sse.js", "lib/settings.js")', "BiliLib.encWbi", "x/player/wbi/v2", "x/player/v2", "x/web-interface/view", "resolveCid", "GET_SUBTITLES", "AI_CHAT", "AI_STOP", "AI_TEST", "chrome.cookies.getAll", "getReader", "VIDEO_CHANGED", "SUBTITLES_READY", "SUBTITLES_ERROR", "emit({ reasoning: p.reasoning })", "SettingsLib.buildChatPayload", "SettingsLib.migrate", "CAPTURE_FRAME", "AI_VISION", "OffscreenCanvas", "createImageBitmap", "visionModel", "SseLib", "subtitleCache", "HTTP 404"].forEach(k => ok("background 包含 " + k, bg.includes(k)));
+ok("reasoning_content 解析在 lib/sse.js", fs.readFileSync(path.join(ROOT, "lib/sse.js"), "utf8").includes("reasoning_content"));
+ok("background 已移除旧的推理模型切换（0.11.0）", !bg.includes("reasoningLevel") && !bg.includes("reasoningModel") && !bg.includes("deepseek-reasoner"));
+ok("background 思考参数不支持时降级重试（0.11.0）", bg.includes("SettingsLib.hasThinkingParams") && bg.includes("SettingsLib.stripThinkingParams") && bg.includes("SettingsLib.isThinkingUnsupported"));
 const extractor = fs.readFileSync(path.join(ROOT, "content/extractor.js"), "utf8");
 ok("extractor 允许 cid 为空（携带 p）", extractor.includes("return { bvid, cid, p }"));
 ok("extractor 有自动重试", extractor.includes("setTimeout(requestSubtitles, 3000)"));
@@ -280,9 +320,17 @@ const optsJs = fs.readFileSync(path.join(ROOT, "options/options.js"), "utf8");
 ["visionBaseUrl", "visionApiKey", "visionModel"].forEach(k => ok("options.js 包含 " + k, optsJs.includes(k)));
 ok("options.js 保存时合并既有设置（0.9.3）", optsJs.includes("Object.assign({}, store.aiSettings || {}, read())"));
 ok("options.js 模型列表判空（0.9.3）", optsJs.includes("Array.isArray(res.models)"));
+ok("options 思考等级为 reasoningEffort 六档（0.11.0）",
+  optsHtml.includes('id="reasoningEffort"') && ["off", "low", "medium", "high", "xhigh", "max"].every(v => optsHtml.includes('value="' + v + '"'))
+  && !optsHtml.includes('id="reasoningLevel"'));
+ok("options 引入 lib/settings.js 并复用同一份默认值（0.11.0）",
+  optsHtml.includes("../lib/settings.js") && optsJs.includes("SettingsLib.DEFAULT_SETTINGS") && optsJs.includes("SettingsLib.migrate"));
+ok("options 保存时清理旧思考字段（0.11.0）", optsJs.includes("delete merged.reasoningLevel") && optsJs.includes("delete merged.reasoningModel"));
+ok("options 模型预设含 v4-flash/v4-pro（0.11.0）", optsHtml.includes("deepseek-v4-flash") && optsHtml.includes("deepseek-v4-pro"));
+ok("settings.js 存在且被 manifest 之外的页面复用（0.11.0）", fs.existsSync(path.join(ROOT, "lib/settings.js")));
 ok("background 不再伪造 forbidden header（0.9.3）", !bg.includes("Cookie: cookieHeader") && bg.includes('credentials: "include"'));
 ok("background SSE [DONE] 终止外层循环（0.9.3）", bg.includes("while (!finished)"));
-ok("background temperature=0 不被吞（0.9.3）", bg.includes("numOr(settings.temperature"));
+ok("background temperature=0 不被吞（0.9.3；0.11.0 起由 lib/settings.js 保证）", setlib.buildChatPayload({ reasoningEffort: "off", temperature: 0 }, []).temperature === 0);
 ok("background 回传解析出的 cid（0.9.3）", bg.includes("const { cid: realCid, list }"));
 
 console.log("\n结果: " + pass + " 通过, " + fail + " 失败");

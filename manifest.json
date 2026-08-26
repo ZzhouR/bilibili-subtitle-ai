@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "B站字幕 AI 助手",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "description": "提取 B 站视频字幕：字幕随播放同步滚动高亮，支持基于字幕与 AI 对话（总结/翻译/提问），并可一键截图让视觉模型识别画面后继续追问。",
   "icons": {
     "16": "assets/icon16.png",

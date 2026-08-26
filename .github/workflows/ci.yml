@@ -15,7 +15,7 @@ jobs:
         with:
           node-version: 20
       - name: Syntax check
-        run: for f in background.js lib/wbi.js lib/markdown.js lib/latex.js lib/sse.js content/*.js sidepanel/panel.js history/history.js options/options.js popup/popup.js test/smoke-test.js; do node --check "$f"; done
+        run: for f in background.js lib/wbi.js lib/markdown.js lib/latex.js lib/sse.js lib/settings.js content/*.js sidepanel/panel.js history/history.js options/options.js popup/popup.js test/smoke-test.js; do node --check "$f"; done
       - name: Manifest validate
         run: node -e "const m=require('./manifest.json'); if(m.manifest_version!==3) process.exit(1); console.log('manifest OK')"
       - name: Smoke tests

@@ -1,5 +1,20 @@
 # 变更日志（CHANGELOG）
 
+## [0.11.0] - 2025（默认模型升级 deepseek-v4-flash + 思考等级六档分级）
+### 变更（破坏性）
+- **默认模型 `deepseek-chat` → `deepseek-v4-flash`**：按 DeepSeek 官方文档（https://api-docs.deepseek.com），现行模型为 `deepseek-v4-flash`（已更新至 DeepSeek-V4-Flash-0731）与 `deepseek-v4-pro`（DeepSeek-V4-Pro-0813）；旧的 `deepseek-chat`、`deepseek-reasoner` 已下线。设置页模型输入框提供两者的下拉预设。
+- **「思考等级」从两档改为六档，且不再靠切换模型实现**：旧实现是 `reasoningLevel=1` 时把模型换成 `deepseek-reasoner`。现在改用官方参数：开关 `{"thinking": {"type": "enabled"|"disabled"}}` + 强度 `{"reasoning_effort": "low"|"medium"|"high"|"xhigh"|"max"}`。设置项合并为单一 `reasoningEffort`，取值 **off / low / medium / high / xhigh / max**（与 agent 侧同一套分级），默认 `high`（与官方默认一致）。
+- **设置结构变更**：`aiSettings.reasoningLevel` 与 `aiSettings.reasoningModel` 被 `aiSettings.reasoningEffort` 取代。**老配置自动迁移**：`reasoningLevel=1` → `high`，`=0` → `off`；模型名 `deepseek-chat`/`deepseek-reasoner` → `deepseek-v4-flash`。用户无需手动改配置，也不会因模型下线而收到 404。
+### 新增
+- **`lib/settings.js`**：AI 设置的默认值、旧配置迁移、思考等级归一与 `/chat/completions` 请求体构造统一为一份纯函数库，Service Worker（`importScripts`）、设置页（`<script>`）与冒烟测试（`require`）三处共用，消除 background 与 options 各写一份默认值导致漂移的隐患。
+- **设置页实时提示实际生效强度**：官方映射为 low→low、medium→high、high→high、xhigh→high、max→max（`deepseek-v4-flash` 与 `deepseek-v4-pro` 相同），即 DeepSeek 上真正有区别的是 low / high / max 三档。切换下拉框即显示"当前：xhigh → DeepSeek 实际按 high 执行"，避免用户误以为六档都有差异。
+- **视觉模型预设增加 `deepseek-v4-flash-vision-exp`**：DeepSeek 新发布的实验性模型额外接受图像输入，可直接用于「📸 截图总结」（Base URL 填 `https://api.deepseek.com`）。
+- **思考参数不被支持时自动降级**：非 DeepSeek 端点不发送 `thinking` 字段；若端点返回 400 且明确抱怨 `thinking`/`reasoning_effort`，自动去掉思考参数并补回 `temperature` 重试一次。余额不足、鉴权失败等无关 400 不会触发重试，原始错误照原样上报。
+### 修复
+- **思考模式下仍在发送 temperature**：官方文档明确思考模式不支持 `temperature`/`top_p`/`presence_penalty`/`frequency_penalty`（设置不报错但也不生效）。现在开启思考时不再发送 `temperature`，只在思考等级为 `off` 时发送 —— 用户不会再遇到"调了温度却毫无变化"。
+### 测试
+- 冒烟测试新增 35 条针对模型与思考等级的断言：官方 effort 映射表逐项核对、六档取值、非法值回落、大小写归一、下线模型名迁移、旧 `reasoningLevel` 迁移、请求体构造（思考开/关两条路径、非 DeepSeek 端点不发 `thinking`、`temperature=0` 不被吞、`stream` 透传）、400 降级判定与参数剥离。
+
 ## [0.10.2] - 2025（修复 AI 回复 Markdown/LaTeX 渲染）
 ### 修复
 - **裸 LaTeX 命令不渲染**：模型经常不写 $ 直接输出 \le、\Leftrightarrow、\begin{vmatrix}...\end{vmatrix} 等。现在 Markdown 渲染会自动识别并扶正这些裸命令（符号转 Unicode、矩阵/分数/根号走完整 LaTeX 管线），--- 分隔线也按 <hr> 渲染。

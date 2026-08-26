@@ -1,16 +1,7 @@
 // 设置页：AI 服务配置
 (() => {
-  const DEFAULT = {
-    baseUrl: "https://api.deepseek.com",
-    apiKey: "",
-    model: "deepseek-chat",
-    reasoningLevel: 0,
-    visionBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    visionApiKey: "",
-    visionModel: "qwen-vl-plus",
-    temperature: 0.7,
-    systemPrompt: "你是专业的视频内容分析助手。你只基于用户提供的视频字幕进行总结、提炼、翻译与问答。回答使用与问题相同的语言，表达简洁、结构清晰。"
-  };
+  // 默认值 / 旧配置迁移 / 思考等级取值都来自 lib/settings.js（与 Service Worker 同一份实现）
+  const DEFAULT = SettingsLib.DEFAULT_SETTINGS;
 
   const $ = sel => document.querySelector(sel);
   const statusEl = $("#status");
@@ -22,16 +13,28 @@
 
   async function load() {
     const store = await chrome.storage.local.get("aiSettings");
-    const s = Object.assign({}, DEFAULT, store.aiSettings || {});
+    const s = SettingsLib.migrate(store.aiSettings || {});
     $("#baseUrl").value = s.baseUrl;
     $("#apiKey").value = s.apiKey;
     $("#model").value = s.model;
-    $("#reasoningLevel").value = String(s.reasoningLevel);
+    $("#reasoningEffort").value = s.reasoningEffort;
     $("#visionBaseUrl").value = s.visionBaseUrl;
     $("#visionApiKey").value = s.visionApiKey;
     $("#visionModel").value = s.visionModel;
     $("#temperature").value = String(s.temperature);
     $("#systemPrompt").value = s.systemPrompt;
+    updateEffortHint();
+  }
+
+  // 提示 DeepSeek 侧的实际映射（medium/xhigh 会被折叠到 high）
+  function updateEffortHint() {
+    const el = $("#effortState");
+    if (!el) return;
+    const level = SettingsLib.normalizeEffort($("#reasoningEffort").value);
+    const actual = SettingsLib.effectiveEffort(level);
+    el.textContent = actual
+      ? "当前：" + level + " → DeepSeek 实际按 " + actual + " 执行；不发送 temperature"
+      : "当前：关闭思考（thinking: disabled），temperature 生效";
   }
 
   function read() {
@@ -40,8 +43,8 @@
     return {
       baseUrl: $("#baseUrl").value.trim() || DEFAULT.baseUrl,
       apiKey: $("#apiKey").value.trim(),
-      model: $("#model").value.trim() || DEFAULT.model,
-      reasoningLevel: Number($("#reasoningLevel").value) === 1 ? 1 : 0,
+      model: SettingsLib.normalizeModel($("#model").value.trim()),
+      reasoningEffort: SettingsLib.normalizeEffort($("#reasoningEffort").value),
       visionBaseUrl: $("#visionBaseUrl").value.trim() || DEFAULT.visionBaseUrl,
       visionApiKey: $("#visionApiKey").value.trim(),
       visionModel: $("#visionModel").value.trim() || DEFAULT.visionModel,
@@ -50,12 +53,17 @@
     };
   }
 
-  // 保存时保留本页未呈现的既有字段（如 reasoningModel），避免整体覆盖丢配置
+  // 保存时保留本页未呈现的既有字段，避免整体覆盖丢配置；
+  // 同时清掉 0.11.0 前的 reasoningLevel / reasoningModel（已被 reasoningEffort 取代）
   async function save() {
     const store = await chrome.storage.local.get("aiSettings");
     const merged = Object.assign({}, store.aiSettings || {}, read());
+    delete merged.reasoningLevel;
+    delete merged.reasoningModel;
     await chrome.storage.local.set({ aiSettings: merged });
   }
+
+  $("#reasoningEffort").addEventListener("change", updateEffortHint);
 
   $("#saveBtn").addEventListener("click", async () => {
     await save();

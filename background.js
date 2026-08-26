@@ -1,15 +1,9 @@
 // B站字幕 AI 助手 - Service Worker
 // 职责：字幕接口代理（wbi 签名 + 登录态 + 缓存）、AI 请求代理（流式 + 可中断）、设置持久化
-importScripts("lib/wbi.js", "lib/sse.js");
+importScripts("lib/wbi.js", "lib/sse.js", "lib/settings.js");
 
 // ---------- 基础工具 ----------
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// 数值兜底：0 是合法值，不能被 || 吞掉（temperature=0 曾被改写为 0.7）
-function numOr(v, dflt) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : dflt;
-}
 
 // 登录态探测：只读 SESSDATA 判断是否已登录（用于给出明确错误提示）。
 // 注意：Cookie 是 forbidden header，脚本无法通过 fetch headers 设置；
@@ -260,22 +254,12 @@ async function handleGetSubtitles(msg) {
 }
 
 // ---------- AI 配置与请求 ----------
-const DEFAULT_SETTINGS = {
-  baseUrl: "https://api.deepseek.com",
-  apiKey: "",
-  model: "deepseek-chat",
-  reasoningLevel: 0,               // 0=普通 1=深度思考
-  reasoningModel: "deepseek-reasoner",
-  visionBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  visionApiKey: "",
-  visionModel: "qwen-vl-plus",
-  temperature: 0.7,
-  systemPrompt: "你是专业的视频内容分析助手。你只基于用户提供的视频字幕进行总结、提炼、翻译与问答。回答使用与问题相同的语言，表达简洁、结构清晰。"
-};
+// 默认值、旧配置迁移与请求体构造统一在 lib/settings.js（纯函数，可单测）
+const DEFAULT_SETTINGS = SettingsLib.DEFAULT_SETTINGS;
 
 async function getSettings() {
   const store = await chrome.storage.local.get("aiSettings");
-  return Object.assign({}, DEFAULT_SETTINGS, store.aiSettings || {});
+  return SettingsLib.migrate(store.aiSettings || {});
 }
 
 const activeStreams = new Map(); // streamId -> AbortController
@@ -290,20 +274,12 @@ async function handleAiChat(msg) {
   const streamId = msg.id;
   if (streamId) activeStreams.set(streamId, controller);
 
-  // 思考等级：1 时切换为推理模型（如 deepseek-reasoner），可输出 reasoning_content
-  const useReasoning = Number(settings.reasoningLevel) === 1;
-  const model = useReasoning ? (settings.reasoningModel || DEFAULT_SETTINGS.reasoningModel) : (settings.model || DEFAULT_SETTINGS.model);
-  const payload = {
-    model,
-    messages: [
-      { role: "system", content: settings.systemPrompt || DEFAULT_SETTINGS.systemPrompt },
-      ...(msg.messages || [])
-    ],
-    temperature: numOr(settings.temperature, DEFAULT_SETTINGS.temperature),
-    stream: msg.stream !== false
-  };
-  // 推理模型（deepseek-reasoner 等）不接受 temperature，带上会被接口拒绝
-  if (useReasoning) delete payload.temperature;
+  // 思考模式（DeepSeek 文档）：thinking 开关 + reasoning_effort 强度分级；
+  // 开启时不发 temperature（文档明确该参数在思考模式下无效）。
+  const payload = SettingsLib.buildChatPayload(settings, [
+    { role: "system", content: settings.systemPrompt || DEFAULT_SETTINGS.systemPrompt },
+    ...(msg.messages || [])
+  ], { stream: msg.stream !== false });
 
   const emit = (data) => {
     if (!streamId) return;
@@ -311,15 +287,27 @@ async function handleAiChat(msg) {
   };
 
   try {
-    const res = await fetch(url, {
+    const post = (body) => fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + settings.apiKey
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body),
       signal: controller.signal
     });
+
+    let res = await post(payload);
+    // 非 DeepSeek 的兼容端点可能不认 thinking / reasoning_effort：仅在它明确抱怨这两个字段时，
+    // 去掉思考参数降级重试一次（DeepSeek 端点本身不会走到这里）。
+    if (res.status === 400 && SettingsLib.hasThinkingParams(payload)) {
+      const detail = await res.text().catch(() => "");
+      if (SettingsLib.isThinkingUnsupported(detail)) {
+        res = await post(SettingsLib.stripThinkingParams(payload, settings));
+      } else {
+        return { ok: false, error: "AI 接口 HTTP 400: " + detail.slice(0, 300) };
+      }
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       return { ok: false, error: "AI 接口 HTTP " + res.status + ": " + text.slice(0, 300) };
@@ -456,7 +444,7 @@ async function handleAiVision(msg) {
         "Authorization": "Bearer " + settings.visionApiKey
       },
       body: JSON.stringify({
-        model: settings.visionModel || "qwen-vl-plus",
+        model: settings.visionModel || DEFAULT_SETTINGS.visionModel,
         messages: [{
           role: "user",
           content: [

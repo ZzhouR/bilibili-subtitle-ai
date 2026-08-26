@@ -30,9 +30,10 @@
 | `content/extractor.js` | 识别视频页 bvid/cid/p（`/video/` 与 `/list/`），请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析并回传）；导航令牌丢弃过期响应；失败自动重试 2 次（3s 间隔） |
 | `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME`；截图总结 `GRAB_FRAME`（canvas 直接抓帧，免权限）与 `SEEK_VIDEO`（兜底：返回视频位置供后台裁剪） | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI；两条截图路径共用 `prepareFrame()` |
 | `lib/latex.js` | 零依赖迷你 LaTeX→HTML 渲染器（希腊字母/分数/根号/上下标/矩阵/符号/重音） | 词边界命令替换 + HTML 转义安全；矩阵单元格递归渲染 |
+| `lib/settings.js` | 纯函数：AI 设置默认值、旧配置迁移（`migrate`）、思考等级归一（`normalizeEffort`/`effectiveEffort`）、`/chat/completions` 请求体构造（`buildChatPayload`） | 无 DOM/Chrome 依赖；SW `importScripts`、设置页 `<script>`、node `require` 三处共用同一份实现 |
 | `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库）、截图总结（按需单帧 + 多轮追问） | 唯一的字幕展示位置（视频页不再注入任何 UI）；两个标签页共用 `startChatStream` 流式渲染 |
 | `history/` | 对话历史管理独立窗口：搜索/查看/重命名/删除/载入侧边栏续聊 | 与侧边栏经 `pendingOpenRecord` + 消息协作 |
-| `options/` | AI 服务配置，存 `chrome.storage.local` 的 `aiSettings` | 支持测试连接（GET /models） |
+| `options/` | AI 服务配置，存 `chrome.storage.local` 的 `aiSettings` | 支持测试连接（GET /models）；默认值与思考等级取值复用 `lib/settings.js` |
 | `popup/` | 显示当前视频字幕状态；打开侧边栏/设置 | 依赖 content 的 `GET_CURRENT_SUBTITLES` |
 
 ## 3. 消息协议（稳定契约）
@@ -69,8 +70,23 @@
 ## 5. AI 对话链路
 
 1. panel 组装 messages（可含字幕上下文块：`【视频字幕】\n[mm:ss] 文本`）；
-2. `AI_CHAT` → background 读 `aiSettings` → POST `{baseUrl}/chat/completions`（OpenAI 兼容）；
-3. 流式：逐段 `data:` 解析 → `AI_STREAM` 广播 delta；`AI_STOP` 用 AbortController 中断。
+2. `AI_CHAT` → background 读 `aiSettings`（经 `SettingsLib.migrate` 迁移）→ `SettingsLib.buildChatPayload` 构造请求体 → POST `{baseUrl}/chat/completions`（OpenAI 兼容）；
+3. 流式：逐段 `data:` 解析 → `AI_STREAM` 广播 delta / reasoning；`AI_STOP` 用 AbortController 中断。
+
+### 5a. 思考模式（0.11.0，按 DeepSeek 官方文档）
+
+| 项 | 取值 |
+|---|---|
+| 默认模型 | `deepseek-v4-flash`（可选 `deepseek-v4-pro`；视觉可选 `deepseek-v4-flash-vision-exp`） |
+| 思考开关 | `{"thinking": {"type": "enabled" \| "disabled"}}` —— 官方默认开启，关闭必须显式声明 |
+| 思考强度 | `{"reasoning_effort": "low" \| "medium" \| "high" \| "xhigh" \| "max"}`，默认 `high` |
+| 设置项 | `aiSettings.reasoningEffort` ∈ `off / low / medium / high / xhigh / max`（`off` = 发 `thinking: disabled`） |
+| DeepSeek 实际映射 | low→low，medium→high，high→high，xhigh→high，max→max（flash 与 pro 一致） |
+| temperature | 思考开启时**不发送**（官方：思考模式下该参数无效）；`off` 时才发送 |
+| 思考内容 | 与 `content` 同级的 `reasoning_content`，`lib/sse.js` 解析后经 `AI_STREAM` 的 `reasoning` 字段广播 |
+| 兼容降级 | 非 DeepSeek 端点不发 `thinking`；若端点回 400 且明确抱怨 `thinking`/`reasoning_effort`，去掉思考参数并补回 temperature 重试一次 |
+
+> 上下文拼接：本项目不使用 `tools`，因此历史轮的 `reasoning_content` 无需回传（官方说明会被忽略）。若将来引入 `tools`，则必须完整回传，否则接口返回 400。
 
 ## 5b. 截图总结链路（0.10.0，抓帧方式 0.10.1 改版）
 
@@ -83,7 +99,7 @@
 
 | 键 | 位置 | 有效期 | 用途 |
 |---|---|---|---|
-| `aiSettings` | chrome.storage.local | 永久 | AI 服务配置 |
+| `aiSettings` | chrome.storage.local | 永久 | AI 服务配置（0.11.0：`reasoningEffort` 取代旧的 `reasoningLevel`/`reasoningModel`，读取时自动迁移） |
 | `wbiKeys` | chrome.storage.local | 1 天 | wbi 签名密钥 |
 | 字幕缓存 | SW 内存 Map + `chrome.storage.local.subtitleCache` | 30 分钟（上限 8 条 LRU） | 同视频重复请求 |
 | cid 缓存 | SW 内存 Map | 会话 | bvid[:p]→cid |
