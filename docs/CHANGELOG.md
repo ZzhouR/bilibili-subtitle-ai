@@ -1,5 +1,16 @@
 # 变更日志（CHANGELOG）
 
+## [0.10.2] - 2025（修复 AI 回复 Markdown/LaTeX 渲染）
+### 修复
+- **裸 LaTeX 命令不渲染**：模型经常不写 $ 直接输出 \le、\Leftrightarrow、\begin{vmatrix}...\end{vmatrix} 等。现在 Markdown 渲染会自动识别并扶正这些裸命令（符号转 Unicode、矩阵/分数/根号走完整 LaTeX 管线），--- 分隔线也按 <hr> 渲染。
+- **$$...$$ 后跟文字的公式被吞**：$$x^2+1$$ 因此… 这类行不再被当成“未闭合块”吞掉，改成按行内公式渲染。
+- **矩阵单元格不处理**：\begin{vmatrix} A \\ \alpha^T \end{vmatrix} 中的 \alpha^T 先前原样输出，现在单元格内容也走完整渲染管线（希腊字母/上下标）。
+- **行内代码被公式化**：`alpha` 里的内容不再被误当作 LaTeX 替换。
+### 改进
+- LaTeX 渲染器补齐常用符号（\le/\ge/\Leftrightarrow/\Longleftrightarrow 等）、矩阵定界符（pmatrix/bmatrix/vmatrix 等）、重音/横线（\overline/\hat/\vec 等）；矩阵单元格内容也走完整渲染管线。
+- 截图总结提示词增加 Markdown 排版要求：小标题 ##、列表 -、公式必须用 $...$ / $$...$$ 包裹。
+- 历史窗口补齐与侧边栏一致的公式样式（history.css）。
+
 ## [0.10.1] - 2025（修复截图权限失败）
 ### 修复
 - **截图必然失败：`Either the '<all_urls>' or 'activeTab' permission is required.`**

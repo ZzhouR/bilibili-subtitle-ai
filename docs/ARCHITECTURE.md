@@ -29,7 +29,7 @@
 | `background.js` | 唯一访问网络/密钥的模块；消息路由；缓存（字幕 30min、wbi 密钥 1d、cid 内存缓存） | API Key 永不进入页面上下文 |
 | `content/extractor.js` | 识别视频页 bvid/cid/p（`/video/` 与 `/list/`），请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析并回传）；导航令牌丢弃过期响应；失败自动重试 2 次（3s 间隔） |
 | `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME`；截图总结 `GRAB_FRAME`（canvas 直接抓帧，免权限）与 `SEEK_VIDEO`（兜底：返回视频位置供后台裁剪） | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI；两条截图路径共用 `prepareFrame()` |
-| `lib/latex.js` | 零依赖迷你 LaTeX→HTML 渲染器（希腊字母/分数/根号/上下标/矩阵/符号） | 词边界命令替换 + HTML 转义安全 |
+| `lib/latex.js` | 零依赖迷你 LaTeX→HTML 渲染器（希腊字母/分数/根号/上下标/矩阵/符号/重音） | 词边界命令替换 + HTML 转义安全；矩阵单元格递归渲染 |
 | `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库）、截图总结（按需单帧 + 多轮追问） | 唯一的字幕展示位置（视频页不再注入任何 UI）；两个标签页共用 `startChatStream` 流式渲染 |
 | `history/` | 对话历史管理独立窗口：搜索/查看/重命名/删除/载入侧边栏续聊 | 与侧边栏经 `pendingOpenRecord` + 消息协作 |
 | `options/` | AI 服务配置，存 `chrome.storage.local` 的 `aiSettings` | 支持测试连接（GET /models） |

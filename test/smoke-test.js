@@ -116,6 +116,23 @@ ok("多行 $$ 不丢公式内容", blockMd.includes("x") && blockMd.includes("z"
 ok("单行 $$ 渲染", mdd.mdToHtml("$$a+b$$").includes("latex-block"));
 ok("未闭合 $$ 也渲染（流式输出中）", mdd.mdToHtml("$$\nE=mc^2").includes("latex-block"));
 
+console.log("-- 公式渲染增强（0.10.2）");
+const BS = String.fromCharCode(92); // 反斜杠
+const leMd = mdd.mdToHtml("1 " + BS + "le r(A) " + BS + "le 2");
+ok("裸 \\le 渲染为 ≤", leMd.includes("≤") && !leMd.includes(BS + "le"));
+const lrMd = mdd.mdToHtml(BS + "Leftrightarrow A = B");
+ok("裸 \\Leftrightarrow 渲染为 ⇔", lrMd.includes("⇔") && !lrMd.includes(BS + "Leftrightarrow"));
+const mxMd = mdd.mdToHtml(BS + "begin{vmatrix} A " + BS + BS + " " + BS + "alpha^T " + BS + "end{vmatrix}");
+ok("裸矩阵环境渲染", mxMd.includes("lmatrix") && mxMd.includes("lcell"));
+ok("矩阵单元格递归渲染", mxMd.includes("α<sup>T</sup>"));
+ok("pmatrix 有括号定界", mdd.mdToHtml(BS + "begin{pmatrix} a " + BS + "end{pmatrix}").includes("ldelim"));
+const dblMd = mdd.mdToHtml("$$x^2+1$$ 因此");
+ok("行内 $$ 不残留 $", dblMd.includes("x<sup>2</sup>") && !dblMd.includes("$$x"));
+ok("分隔线 ---", mdd.mdToHtml("---").includes("<hr>"));
+const BT = String.fromCharCode(96);
+const codeMd = mdd.mdToHtml(BT + BS + "alpha" + BT + " 与 $" + BS + "alpha$");
+ok("行内代码不公式化", codeMd.includes("<code>" + BS + "alpha</code>") && codeMd.includes("α"));
+
 console.log("-- 截图总结逻辑（与 sidepanel/panel.js、content/subtitle-view.js 一致）");
 // needSeek：目标≈当前帧时必须跳过 seek（写入同值不触发 seeked，只能等 1500ms 超时）
 const needSeek = (cur, target) => Math.abs((cur || 0) - target) > 0.05;
@@ -182,7 +199,7 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.10.1", manifest.version, "0.10.1");
+eq("版本号为 0.10.2", manifest.version, "0.10.2");
 ok("权限含 storage/cookies/sidePanel/activeTab", ["storage", "cookies", "sidePanel", "activeTab"].every(p => manifest.permissions.includes(p)));
 ok("host_permissions 含字幕 CDN hdslb", (manifest.host_permissions || []).includes("https://*.hdslb.com/*"));
 const csMatches = (manifest.content_scripts || []).flatMap(cs => cs.js ? cs.matches : []);
