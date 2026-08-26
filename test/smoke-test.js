@@ -144,6 +144,31 @@ const near = t => shotLines.filter(l => l.end >= t - SHOT_SUB_WINDOW && l.start 
 eq("附近字幕窗口 ±30s", near(120), "b,c");
 eq("边界相交计入", near(135), "b,c");
 eq("窗口外不取", near(400), "");
+// 抓帧双路径分流（与 background.handleCaptureFrame 一致）：
+// canvas 成功直接用；tainted（污染/全黑）才回退整页截图；其他失败不该白跑一次截图
+const routeGrab = grab => {
+  if (grab && grab.ok && grab.image) return "canvas";
+  if (grab && !grab.tainted) return "fail";
+  return "capture";
+};
+eq("抓帧成功走 canvas", routeGrab({ ok: true, image: "data:..." }), "canvas");
+eq("画布污染回退整页截图", routeGrab({ ok: false, tainted: true, error: "SecurityError" }), "capture");
+eq("全黑帧回退整页截图", routeGrab({ ok: false, tainted: true, error: "抓到全黑帧（硬件加速叠加层）" }), "capture");
+eq("播放器未就绪不回退", routeGrab({ ok: false, error: "视频帧尚未就绪（播放器仍在加载？）" }), "fail");
+// 权限类错误识别（后台判断是否给授权指引 / 面板是否插入设置页入口）
+const permRe = /all_urls|activeTab|permission/i;
+ok("识别 chrome 原始权限报错", permRe.test("Either the '<all_urls>' or 'activeTab' permission is required."));
+ok("非权限错误不误判", !permRe.test("视觉接口 HTTP 401: invalid api key"));
+// 全黑帧探测：对 RGBA 抽样求均值，阈值 4
+const blackScore = fill => {
+  const probe = new Array(1024 * 4).fill(fill);
+  let sum = 0, n = 0;
+  for (let i = 0; i < probe.length; i += 4 * 64) { sum += probe[i] + probe[i + 1] + probe[i + 2]; n += 3; }
+  return n ? sum / n : 0;
+};
+ok("全黑帧被判定为黑", blackScore(0) < 4);
+ok("极暗画面不判黑", !(blackScore(5) < 4));
+ok("正常画面不判黑", !(blackScore(120) < 4));
 
 console.log("-- manifest 资源完整性");
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
@@ -157,7 +182,7 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.10.0", manifest.version, "0.10.0");
+eq("版本号为 0.10.1", manifest.version, "0.10.1");
 ok("权限含 storage/cookies/sidePanel/activeTab", ["storage", "cookies", "sidePanel", "activeTab"].every(p => manifest.permissions.includes(p)));
 ok("host_permissions 含字幕 CDN hdslb", (manifest.host_permissions || []).includes("https://*.hdslb.com/*"));
 const csMatches = (manifest.content_scripts || []).flatMap(cs => cs.js ? cs.matches : []);
@@ -201,6 +226,17 @@ ok("panel.js 截图前校验视频页（0.10.0）", panel.includes("当前标签
 ok("panel.js 中断有本地兜底收尾（0.10.0）", panel.includes('finishStream(cur, null, "⚠ 已中断", true)'));
 ok("panel.js 追问失败撤回提问（0.10.0）", panel.includes('shotThread[shotThread.length - 1].role === "user"') && panel.includes("shotThread.pop()"));
 ok("panel.js 切视频重置截图会话（0.10.0）", panel.includes("已切换视频，截图会话已重置"));
+ok("view.js 支持免权限直接抓帧 GRAB_FRAME（0.10.1）", view.includes("GRAB_FRAME") && view.includes("videoWidth") && view.includes("toDataURL"));
+ok("view.js 抓帧与截图共用 prepareFrame（0.10.1）", view.includes("function prepareFrame") && view.includes("resumePlayback"));
+ok("view.js 画布污染回报 tainted（0.10.1）", view.includes("tainted: true"));
+ok("background 抓帧优先 canvas 再兜底截图（0.10.1）", bg.includes('type: "GRAB_FRAME"') && bg.includes('via: "canvas"') && bg.includes('via: "capture"'));
+ok("background 截图权限错误给出授权指引（0.10.1）", bg.includes("all_urls|activeTab|permission") && bg.includes("授予截图兜底权限"));
+ok("manifest 声明可选全站权限（0.10.1）", (manifest.optional_host_permissions || []).includes("<all_urls>"));
+const optsHtml = fs.readFileSync(path.join(ROOT, "options/options.html"), "utf8");
+const optsJs2 = fs.readFileSync(path.join(ROOT, "options/options.js"), "utf8");
+ok("options 提供截图权限授予/撤销（0.10.1）", optsHtml.includes("grantShotBtn") && optsHtml.includes("revokeShotBtn"));
+ok("options.js 用 permissions.request 申请（0.10.1）", optsJs2.includes("chrome.permissions.request") && optsJs2.includes("chrome.permissions.remove") && optsJs2.includes("chrome.permissions.contains"));
+ok("panel.js 权限失败给出设置页入口（0.10.1）", panel.includes("chrome.runtime.openOptionsPage") && panel.includes("打开设置页授予截图兜底权限"));
 const panelCss = fs.readFileSync(path.join(ROOT, "sidepanel/panel.css"), "utf8");
 ok("panel.css 含截图总结样式且已清理旧样式（0.10.0）",
   panelCss.includes(".msg.shot-img") && panelCss.includes("#shotView") && panelCss.includes(".p-shot-status")

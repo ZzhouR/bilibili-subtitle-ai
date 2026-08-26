@@ -2,7 +2,7 @@
 
 > 一个让 B 站视频 **看得懂、聊得来、留得下** 的浏览器扩展：自动提取视频字幕，随播放同步滚动高亮，并基于字幕与 AI 对话（总结 / 要点 / 翻译 / 自由提问）。
 
-[![version](https://img.shields.io/badge/version-v0.10.0-blue)](https://github.com/) [![manifest](https://img.shields.io/badge/Manifest%20V3-Chrome%20%26%20Edge-brightgreen)](https://developer.chrome.com/docs/extensions) [![tests](https://img.shields.io/badge/tests-smoke%20suite-green)](test/smoke-test.js) [![license](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
+[![version](https://img.shields.io/badge/version-v0.10.1-blue)](https://github.com/) [![manifest](https://img.shields.io/badge/Manifest%20V3-Chrome%20%26%20Edge-brightgreen)](https://developer.chrome.com/docs/extensions) [![tests](https://img.shields.io/badge/tests-smoke%20suite-green)](test/smoke-test.js) [![license](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
 ---
 
@@ -13,7 +13,7 @@
 | 🎬 | **字幕自动提取** | 官方字幕轨道（CC / AI 字幕）自动识别，wbi 签名 + 双通道接口 + 30 分钟缓存；分P视频按 `?p=N` 精确对应字幕 |
 | 📜 | **随播放同步滚动** | 侧边栏字幕随视频播放自动高亮（蓝色）并居中滚动，顶部“当前句”显示条实时更新，**双击字幕行跳转**视频 |
 | 🤖 | **字幕 + AI 对话** | 发送提问自动附带当前字幕全文作为知识库；一键总结 / 要点 / 英译；流式输出、可中断 |
-| 📸 | **截图总结 + 追问** | 一键截取**当前画面**，视觉模型识别板书/公式（LaTeX）并生成结构化总结；可围绕这张画面继续多轮提问，也可连续截多张（需在设置中配置视觉模型） |
+| 📸 | **截图总结 + 追问** | 一键截取**当前画面**（直接读取播放器视频帧，无需额外权限，原生分辨率、不含弹幕与播放器 UI），视觉模型识别板书/公式（LaTeX）并生成结构化总结；可围绕这张画面继续多轮提问，也可连续截多张（需在设置中配置视觉模型） |
 | 🧠 | **深度思考模式** | 可选 DeepSeek-R1 推理模型，先展示灰色“思考过程”，再输出正式回答 |
 | 📝 | **Markdown 渲染** | AI 回复按 Markdown 渲染（代码块 / 标题 / 列表 / 引用 / 链接），安全转义 + 链接白名单 |
 | 🗂️ | **对话历史管理** | 独立窗口管理：搜索、重命名、删除、载入侧边栏继续对话 |
@@ -95,7 +95,7 @@ bilibili-subtitle-ai/
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) —— 架构说明与消息协议契约
 - [docs/DECISIONS.md](docs/DECISIONS.md) —— 技术决策记录（ADR）与已知陷阱
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) —— 变更日志（0.1.0 → 0.10.0）
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) —— 变更日志（0.1.0 → 0.10.1）
 - [docs/FEATURE-SHOT-SUMMARY.md](docs/FEATURE-SHOT-SUMMARY.md) —— 截图总结功能设计（数据流 / UI / 决策）
 - [PLAN.md](PLAN.md) —— 开发计划
 
@@ -115,7 +115,7 @@ node test/smoke-test.js
 
 ```bash
 cd ..
-zip -r bilibili-subtitle-ai-v0.10.0.zip bilibili-subtitle-ai -x "*/test/*" "*/docs/screenshots/*"
+zip -r bilibili-subtitle-ai-v0.10.1.zip bilibili-subtitle-ai -x "*/test/*" "*/docs/screenshots/*"
 ```
 
 ## 📋 Manifest 权限说明
@@ -125,8 +125,10 @@ zip -r bilibili-subtitle-ai-v0.10.0.zip bilibili-subtitle-ai -x "*/test/*" "*/do
 | `sidePanel` | 打开 AI 侧边栏 |
 | `storage` | 保存设置、历史与字幕缓存 |
 | `cookies` | 读取 B 站登录态（SESSDATA）请求字幕 |
-| `tabs` / `activeTab` | 跟随当前标签页、截图视频画面（截图总结） |
+| `tabs` | 跟随当前标签页（识别当前 B 站视频页） |
+| `activeTab` | 整页截图兜底（仅在直接抓帧被跨域保护时用到） |
 | host permissions | 请求 B 站接口与用户配置的 AI 服务 |
+| `<all_urls>`（**可选**，默认不申请） | 截图兜底：仅当视频帧无法直接抓取时，在设置页手动授予 |
 
 > 使用第三方兼容 API 时，字幕与提问内容会发送到该服务商；扩展本身不收集数据。
 
@@ -153,6 +155,9 @@ A：确认扩展已刷新（v0.10.0+）。如仍异常，请打开侧边栏观�
 
 **Q：可以用其他 AI 服务吗？**
 A：可以。任何 OpenAI 兼容端点（OpenAI、通义、Kimi、智谱、本地 Ollama 等）均可在设置页配置。
+
+**Q：截图报 `Either the '<all_urls>' or 'activeTab' permission is required.`？**
+A：v0.10.1 已修复。截图改为直接读取播放器视频帧，不再需要截图权限；请在 `chrome://extensions` 点扩展卡片的**刷新**重载扩展，并刷新 B 站视频页（content script 需重新注入）。若提示"视频帧被跨域保护"，再到设置页「📷 截图兜底权限」点授予即可。
 
 ## 📄 License
 

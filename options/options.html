@@ -78,7 +78,7 @@ button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
 
   <div class="card">
     <h2>🖼️ 视觉模型（截图总结画面识别）</h2>
-    <div class="hint">用于识别课程截图中的数学公式/板书，OpenAI 兼容 vision 接口。不配置时「📸 截图总结」无法使用。</div>
+    <div class="hint">用于识别课程截图中的数学公式/板书，OpenAI 兼容 vision 接口。不配置时「📸 截图总结」无法使用。截图本身<b>不需要额外权限</b>（直接读取播放器视频帧）。</div>
     <label for="visionBaseUrl">Base URL（视觉）</label>
     <input type="text" id="visionBaseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
     <div class="hint">如通义 qwen-vl（上例）、智谱 GLM-4V：https://open.bigmodel.cn/api/paas/v4、本地 Ollama：http://127.0.0.1:11434/v1</div>
@@ -86,6 +86,14 @@ button.secondary:hover { color: #00a1d6; border-color: #00a1d6; filter: none; }
     <input type="password" id="visionApiKey" placeholder="sk-...">
     <label for="visionModel">模型（视觉）</label>
     <input type="text" id="visionModel" placeholder="qwen-vl-plus">
+
+    <h2 style="margin-top:18px;">📷 截图兜底权限（可选）</h2>
+    <div class="hint">截图默认直接从播放器读取视频帧，<b>无需任何额外权限</b>。仅当遇到"视频帧被跨域保护"时，才需要授权整页截图作为兜底。</div>
+    <div class="actions" style="margin-top:8px;">
+      <button class="secondary" id="grantShotBtn">授予截图兜底权限</button>
+      <button class="secondary" id="revokeShotBtn">撤销</button>
+    </div>
+    <div class="kv" id="shotPermState"></div>
   </div>
 
   <div class="actions">

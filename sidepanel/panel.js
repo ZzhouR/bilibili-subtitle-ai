@@ -550,6 +550,16 @@
       const err = (e && e.message) ? e.message : String(e);
       setShotStatus("⚠ " + err);
       appendMsg(shotList, "sys", "⚠ " + err);
+      // 权限类失败给出可直接操作的入口（整页截图兜底需要用户手动授权 <all_urls>）
+      if (/权限|permission|all_urls|activeTab/i.test(err)) {
+        const tip = appendMsg(shotList, "sys", "");
+        const a = document.createElement("a");
+        a.href = "#";
+        a.textContent = "打开设置页授予截图兜底权限 →";
+        a.addEventListener("click", ev => { ev.preventDefault(); chrome.runtime.openOptionsPage(); });
+        tip.querySelector(".body").appendChild(a);
+        shotList.scrollTop = shotList.scrollHeight;
+      }
     } finally {
       setShotBusy(false);
     }

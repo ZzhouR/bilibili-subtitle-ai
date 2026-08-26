@@ -378,15 +378,44 @@ function bufToBase64(buf) {
 }
 
 // 截图 → 裁剪视频区域 → 压缩到 ≤1024px → dataURL
+// 双路径：① content 内 canvas 直接抓 video 帧（无需任何截图权限，首选）；
+//        ② captureVisibleTab 整页截图后裁剪（需 <all_urls>/activeTab，仅当 ① 画布被污染时兜底）。
 async function handleCaptureFrame(msg) {
   const { tabId, time } = msg;
   try {
+    // ① 直接抓帧：B 站用 MSE(blob:) 播放，画布不会被污染，绝大多数情况一步到位
+    let grab = null;
+    try {
+      grab = await chrome.tabs.sendMessage(tabId, { type: "GRAB_FRAME", time });
+    } catch (e) {
+      return { ok: false, error: "未连接到视频页，请在 B 站视频页刷新后重试" };
+    }
+    if (grab && grab.ok && grab.image) {
+      return { ok: true, image: grab.image, size: grab.size || "", via: "canvas" };
+    }
+    // 明确的非权限类失败（播放器未就绪等）：直接回报，兜底截图也救不了
+    if (grab && !grab.tainted) {
+      return { ok: false, error: (grab.error || "无法读取视频帧") };
+    }
+
+    // ② 兜底：整页截图 + 裁剪视频区域
     const tab = await chrome.tabs.get(tabId);
     const seed = await chrome.tabs.sendMessage(tabId, { type: "SEEK_VIDEO", time });
     if (!seed || !seed.ok || !seed.rect) {
       return { ok: false, error: "无法定位视频画面（播放器未就绪？）" };
     }
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 82 });
+    let dataUrl;
+    try {
+      dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 82 });
+    } catch (e) {
+      const em = (e && e.message) ? e.message : String(e);
+      // activeTab 只在用户点击扩展图标等操作后临时授予，侧边栏里的按钮不会触发它，
+      // 所以兜底路径需要用户显式授予全站权限。
+      if (/all_urls|activeTab|permission/i.test(em)) {
+        return { ok: false, error: "视频帧被跨域保护（无法直接抓帧），兜底整页截图缺少权限。请在「设置 → 视觉模型」点击「授予截图兜底权限」后重试。" };
+      }
+      return { ok: false, error: "整页截图失败：" + em };
+    }
     const blob = await (await fetch(dataUrl)).blob();
     const bmp = await createImageBitmap(blob);
     const scale = bmp.width / (seed.viewWidth || bmp.width);
@@ -403,7 +432,7 @@ async function handleCaptureFrame(msg) {
     ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, ow, oh);
     const outBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
     const buf = await outBlob.arrayBuffer();
-    return { ok: true, image: "data:image/jpeg;base64," + bufToBase64(buf), size: ow + "x" + oh };
+    return { ok: true, image: "data:image/jpeg;base64," + bufToBase64(buf), size: ow + "x" + oh, via: "capture" };
   } catch (e) {
     return { ok: false, error: (e && e.message) ? e.message : String(e) };
   }

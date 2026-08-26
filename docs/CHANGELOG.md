@@ -1,5 +1,19 @@
 # 变更日志（CHANGELOG）
 
+## [0.10.1] - 2025（修复截图权限失败）
+### 修复
+- **截图必然失败：`Either the '<all_urls>' or 'activeTab' permission is required.`**
+  `chrome.tabs.captureVisibleTab` 需要 `<all_urls>` 主机权限，或由**用户手势**（点击扩展图标等）临时授予的 `activeTab`。侧边栏里的「📷 截图并总结」按钮不属于能激活 `activeTab` 的手势，manifest 里静态列出的 `activeTab` 权限因此完全帮不上忙 —— 每次截图都被拒。
+  改为**双路径**，首选路径不需要任何截图权限：
+  1. **直接抓帧（默认）**：content script 在页面内 `canvas.drawImage(video)` → `toDataURL`，取到的是视频原生分辨率的画面，且不受窗口是否可见/被遮挡影响。
+  2. **整页截图兜底**：仅当画布被跨域污染（`SecurityError`）或抓到全黑帧时，才回退到 `captureVisibleTab` + 裁剪；此路径所需的 `<all_urls>` 降级为 `optional_host_permissions`，由用户在设置页按需授权。
+### 新增
+- **全黑帧探测**：硬件加速叠加层下 `drawImage` 可能得到全黑画面。抓帧后对像素抽样求均值，判定为黑帧时按 `tainted` 回退到整页截图，避免把黑图送去识别。
+- **设置页「📷 截图兜底权限」**：`chrome.permissions.request/remove/contains` 提供授予、撤销与当前状态显示（默认无需授权）。
+- **权限失败可直接跳转**：截图因权限失败时，截图总结页给出「打开设置页授予截图兜底权限 →」链接（`chrome.runtime.openOptionsPage`）。
+### 重构
+- content script 抽出 `prepareFrame()` / `resumePlayback()`：`GRAB_FRAME` 与 `SEEK_VIDEO` 共用"暂停 → 必要时 seek → 等稳定 → 恢复播放"逻辑，免 seek 优化对两条路径同时生效。
+
 ## [0.10.0] - 2025（「AI 总结」改为「截图总结」）
 ### 变更（破坏性）
 - **「🤖 AI 总结」→「📸 截图总结」**：不再按分段间隔（默认 120s）自动遍历全片截图。改为**完全按需**：点「📷 截图并总结」→ 取当前播放位置 → 截取当前画面 → 视觉模型识别 → 流式生成结构化总结。

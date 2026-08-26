@@ -92,6 +92,32 @@
     }
   });
 
+  // 截图总结：暂停 →（必要时）seek 到目标时间 → 等画面稳定，然后 resolve
+  function prepareFrame(v, time) {
+    const wasPlaying = !v.paused;
+    try { v.pause(); } catch (_) { /* ignore */ }
+    const dur = v.duration && isFinite(v.duration) ? v.duration : time;
+    const target = Math.max(0, Math.min(time, dur));
+    // 目标就是当前帧（截取"当前画面"的常见情形）：写入同值不会触发 seeked，
+    // 会白等 1500ms 超时，因此直接跳过 seek。
+    const needSeek = Math.abs((v.currentTime || 0) - target) > 0.05;
+    const settled = needSeek ? new Promise(resolve => {
+      let done = false;
+      const fin = () => { if (!done) { done = true; resolve(); } };
+      const tm = setTimeout(fin, 1500);
+      v.addEventListener("seeked", () => { clearTimeout(tm); fin(); }, { once: true });
+      v.currentTime = target;
+    }) : Promise.resolve();
+    return settled.then(() => new Promise(resolve => {
+      setTimeout(() => resolve({ wasPlaying, needSeek }), needSeek ? 350 : 120);
+    }));
+  }
+
+  function resumePlayback(v, wasPlaying) {
+    if (!wasPlaying) return;
+    try { v.play().catch(() => {}); } catch (_) { /* ignore */ }
+  }
+
   // popup / 侧边栏查询与跳转
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || typeof msg.type !== "string") return;
@@ -113,38 +139,70 @@
       sendResponse({ ok: true, time: v ? v.currentTime || 0 : 0, duration: v ? (v.duration || 0) : 0 });
       return;
     }
-    // 截图总结：暂停→（必要时）seek 到目标时间→画面稳定后返回视频元素位置（供后台截图裁剪）
+    // 截图总结（首选路径）：直接从 video 元素取帧，无需任何截图权限，
+    // 且不受页面是否可见/被遮挡影响，分辨率也是视频原生尺寸。
+    if (msg.type === "GRAB_FRAME") {
+      const v = findVideo();
+      if (!v || typeof msg.time !== "number" || !isFinite(msg.time)) {
+        sendResponse({ ok: false, error: "video 不可用" });
+        return;
+      }
+      prepareFrame(v, msg.time).then(({ wasPlaying }) => {
+        try {
+          const vw = v.videoWidth || 0;
+          const vh = v.videoHeight || 0;
+          if (!vw || !vh) {
+            sendResponse({ ok: false, error: "视频帧尚未就绪（播放器仍在加载？）" });
+            return;
+          }
+          const maxEdge = 1024;
+          const ratio = Math.min(1, maxEdge / Math.max(vw, vh));
+          const ow = Math.max(1, Math.round(vw * ratio));
+          const oh = Math.max(1, Math.round(vh * ratio));
+          const canvas = document.createElement("canvas");
+          canvas.width = ow;
+          canvas.height = oh;
+          const cx = canvas.getContext("2d");
+          cx.drawImage(v, 0, 0, ow, oh);
+          // 双重校验（都会在失败时回退到后台整页截图）：
+          // ① getImageData/toDataURL 在画布被污染时抛 SecurityError（直链视频且无 CORS 头）；
+          // ② 硬件加速叠加层下 drawImage 可能得到全黑帧 —— 必须识破，否则送去识别的是一张黑图。
+          const probe = cx.getImageData(0, 0, ow, oh).data;
+          let sum = 0, n = 0;
+          for (let i = 0; i < probe.length; i += 4 * 64) {
+            sum += probe[i] + probe[i + 1] + probe[i + 2];
+            n += 3;
+          }
+          if (n && sum / n < 4) {
+            sendResponse({ ok: false, tainted: true, error: "抓到全黑帧（硬件加速叠加层）" });
+            return;
+          }
+          const image = canvas.toDataURL("image/jpeg", 0.85);
+          sendResponse({ ok: true, image, size: ow + "x" + oh });
+        } catch (e) {
+          sendResponse({ ok: false, tainted: true, error: (e && e.message) ? e.message : String(e) });
+        } finally {
+          resumePlayback(v, wasPlaying);
+        }
+      });
+      return true; // 异步响应：必须返回 true 保持消息通道，否则 sendResponse 失效
+    }
+    // 截图总结（兜底路径）：只定位视频区域，由后台 captureVisibleTab 截图后裁剪
     if (msg.type === "SEEK_VIDEO") {
       const v = findVideo();
       if (!v || typeof msg.time !== "number" || !isFinite(msg.time)) {
         sendResponse({ ok: false, error: "video 不可用" });
         return;
       }
-      const wasPlaying = !v.paused;
-      try { v.pause(); } catch (_) { /* ignore */ }
-      const dur = v.duration && isFinite(v.duration) ? v.duration : msg.time;
-      const target = Math.max(0, Math.min(msg.time, dur));
-      // 目标就是当前帧（截取"当前画面"的常见情形）：写入同值不会触发 seeked，
-      // 会白等 1500ms 超时，因此直接跳过 seek。
-      const needSeek = Math.abs((v.currentTime || 0) - target) > 0.05;
-      const settled = needSeek ? new Promise(resolve => {
-        let done = false;
-        const fin = () => { if (!done) { done = true; resolve(); } };
-        const tm = setTimeout(fin, 1500);
-        v.addEventListener("seeked", () => { clearTimeout(tm); fin(); }, { once: true });
-        v.currentTime = target;
-      }) : Promise.resolve();
-      settled.then(() => {
-        setTimeout(() => {
-          const r = v.getBoundingClientRect();
-          sendResponse({
-            ok: true,
-            rect: { left: r.left, top: r.top, width: r.width, height: r.height },
-            viewWidth: window.innerWidth,
-            viewHeight: window.innerHeight,
-          });
-          if (wasPlaying) { try { v.play().catch(() => {}); } catch (_) { /* ignore */ } }
-        }, needSeek ? 350 : 120);
+      prepareFrame(v, msg.time).then(({ wasPlaying }) => {
+        const r = v.getBoundingClientRect();
+        sendResponse({
+          ok: true,
+          rect: { left: r.left, top: r.top, width: r.width, height: r.height },
+          viewWidth: window.innerWidth,
+          viewHeight: window.innerHeight,
+        });
+        resumePlayback(v, wasPlaying);
       });
       return true; // 异步响应：必须返回 true 保持消息通道，否则 sendResponse 失效
     }

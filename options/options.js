@@ -81,5 +81,36 @@
     }
   });
 
+  // 截图兜底权限（<all_urls>）：只在直接抓帧被跨域保护时才需要，因此做成可选权限按需申请
+  const SHOT_PERM = { origins: ["<all_urls>"] };
+
+  async function refreshShotPerm() {
+    const el = $("#shotPermState");
+    if (!el) return;
+    let granted = false;
+    try { granted = await chrome.permissions.contains(SHOT_PERM); } catch (_) { granted = false; }
+    el.textContent = granted ? "当前状态：已授权（整页截图兜底可用）" : "当前状态：未授权（仅使用直接抓帧）";
+  }
+
+  const grantBtn = $("#grantShotBtn");
+  if (grantBtn) {
+    grantBtn.addEventListener("click", async () => {
+      // request 必须由用户手势直接触发，不能放在 await 之后
+      let granted = false;
+      try { granted = await chrome.permissions.request(SHOT_PERM); } catch (e) { granted = false; }
+      setStatus(granted ? "✅ 已获得截图兜底权限" : "❌ 未获得权限（可继续使用直接抓帧）", granted ? "ok" : "err");
+      refreshShotPerm();
+    });
+  }
+  const revokeBtn = $("#revokeShotBtn");
+  if (revokeBtn) {
+    revokeBtn.addEventListener("click", async () => {
+      try { await chrome.permissions.remove(SHOT_PERM); } catch (_) { /* ignore */ }
+      setStatus("已撤销截图兜底权限");
+      refreshShotPerm();
+    });
+  }
+
   load();
+  refreshShotPerm();
 })();

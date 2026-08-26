@@ -28,7 +28,7 @@
 | `lib/wbi.js` | 纯函数：MD5、wbi 签名（`encWbi`）、字幕解析（`parseTs`/`normalizeBody`） | 无 DOM/Chrome 依赖，可被 SW importScripts 与 node require |
 | `background.js` | 唯一访问网络/密钥的模块；消息路由；缓存（字幕 30min、wbi 密钥 1d、cid 内存缓存） | API Key 永不进入页面上下文 |
 | `content/extractor.js` | 识别视频页 bvid/cid/p（`/video/` 与 `/list/`），请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析并回传）；导航令牌丢弃过期响应；失败自动重试 2 次（3s 间隔） |
-| `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME`；截图总结 `SEEK_VIDEO`（暂停→必要时 seek→返回视频位置） | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI |
+| `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME`；截图总结 `GRAB_FRAME`（canvas 直接抓帧，免权限）与 `SEEK_VIDEO`（兜底：返回视频位置供后台裁剪） | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI；两条截图路径共用 `prepareFrame()` |
 | `lib/latex.js` | 零依赖迷你 LaTeX→HTML 渲染器（希腊字母/分数/根号/上下标/矩阵/符号） | 词边界命令替换 + HTML 转义安全 |
 | `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库）、截图总结（按需单帧 + 多轮追问） | 唯一的字幕展示位置（视频页不再注入任何 UI）；两个标签页共用 `startChatStream` 流式渲染 |
 | `history/` | 对话历史管理独立窗口：搜索/查看/重命名/删除/载入侧边栏续聊 | 与侧边栏经 `pendingOpenRecord` + 消息协作 |
@@ -41,14 +41,15 @@
 |---|---|---|---|
 | content → background | `GET_SUBTITLES` | `{bvid, cid?, p?}` | `{ok, tracks[], fromCache, cid}`（cid 为后台实际使用的 cid）或 `{ok:false, error}` |
 | panel/popup → content | `GET_CURRENT_SUBTITLES` | – | `{ok, tracks[], info}` |
-| panel → content | `SEEK_VIDEO` | `{time}` | `{ok, rect, viewWidth, viewHeight}`（异步；暂停后：目标≈当前帧则免 seek，否则 seek 并等 `seeked`/1500ms，再等画面稳定） |
+| panel → content | `GRAB_FRAME` | `{time}` | `{ok, image, size}` 或 `{ok:false, tainted?, error}`（异步；canvas 直接抓帧，免截图权限；`tainted` 表示画布被污染或全黑，需兜底） |
+| panel → content | `SEEK_VIDEO` | `{time}` | `{ok, rect, viewWidth, viewHeight}`（异步；仅兜底路径使用。暂停后：目标≈当前帧则免 seek，否则 seek 并等 `seeked`/1500ms，再等画面稳定） |
 | panel → content | `GET_PLAYBACK_TIME` | – | `{ok, time, duration}` |
 | content → 扩展页 | `PLAYBACK_HIGHLIGHT` | `{indexes:[{trackIndex,index}]}` | –（侧边栏同步高亮/滚动） |
 | content → 扩展页 | `VIDEO_CHANGED` | `{bvid}` | –（侧边栏自动刷新字幕） |
 | history 窗口 → 侧边栏 | `LOAD_HISTORY_TO_PANEL` | `{id}` | –（侧边栏载入该历史对话） |
 | content → background → 扩展页 | `SUBTITLES_READY` | `{bvid}` | –（新字幕就绪，侧边栏拉取最新字幕） |
 | content → background → 扩展页 | `SUBTITLES_ERROR` | `{error}` | –（新字幕获取失败，侧边栏刷新状态） |
-| panel → background | `CAPTURE_FRAME` | `{tabId, time}` | `{ok, image}` 或 `{ok:false,error}`（截图+裁剪） |
+| panel → background | `CAPTURE_FRAME` | `{tabId, time}` | `{ok, image, size, via:"canvas"\|"capture"}` 或 `{ok:false,error}`（先 `GRAB_FRAME`，污染/全黑才 `captureVisibleTab`+裁剪） |
 | panel → background | `AI_VISION` | `{image, prompt?}` | `{ok, content}`（视觉模型识别） |
 | panel → background | `AI_CHAT` | `{id, messages[], stream}` | 异步：`AI_STREAM` 广播 + 最终 `{ok,streamed}` |
 | background → 所有扩展页 | `AI_STREAM` | `{id, delta\|done\|error}` | – |
@@ -71,9 +72,9 @@
 2. `AI_CHAT` → background 读 `aiSettings` → POST `{baseUrl}/chat/completions`（OpenAI 兼容）；
 3. 流式：逐段 `data:` 解析 → `AI_STREAM` 广播 delta；`AI_STOP` 用 AbortController 中断。
 
-## 5b. 截图总结链路（0.10.0）
+## 5b. 截图总结链路（0.10.0，抓帧方式 0.10.1 改版）
 
-1. panel 取当前播放位置（`GET_PLAYBACK_TIME`）→ `CAPTURE_FRAME` 截取并裁剪当前画面；
+1. panel 取当前播放位置（`GET_PLAYBACK_TIME`）→ `CAPTURE_FRAME`；后台先试 `GRAB_FRAME`（页面内 canvas 直接抓 video 帧，**不需要任何截图权限**），仅当画布被污染或抓到全黑帧时才回退 `captureVisibleTab` + 裁剪（该兜底需用户在设置页授予可选权限 `<all_urls>`）；
 2. `AI_VISION` 交视觉模型识别（公式输出 LaTeX）；
 3. 把「画面识别结果 +（可选）±30s 附近字幕 + 总结指令」作为一条 user 消息追加进会话线程 `shotThread`，整体经 `AI_CHAT` 流式总结；
 4. 追问/再截图都追加进同一 `shotThread`（上限 24 条），因此多轮上下文连续；详见 `docs/FEATURE-SHOT-SUMMARY.md`。

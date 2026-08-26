@@ -38,3 +38,9 @@
 ## D6：面板布局变量化
 - **决策**：字幕区高度用 CSS 变量 `--subtitle-h`，分隔条拖拽修改并持久化到 localStorage。
 - **理由**：避开 flex-basis 与 JS 内联样式的耦合；下限 15% / 上限 70% 保证对话区可用。
+
+## D9：截图优先用页面内 canvas 抓帧，不用 captureVisibleTab（0.10.1）
+- **背景**：0.10.0 的截图总结走 `chrome.tabs.captureVisibleTab`，实测每次都返回 `Either the '<all_urls>' or 'activeTab' permission is required.`。原因是该 API 要求 `<all_urls>` 主机权限，或**由用户手势临时授予**的 `activeTab`；侧边栏中的按钮点击不属于能激活 `activeTab` 的手势（只有点击扩展图标、快捷键、右键菜单等入口才会激活），因此 manifest 里静态声明 `activeTab` 毫无作用。
+- **决策**：首选在 content script 内 `canvas.drawImage(video)` + `toDataURL` 直接抓帧 —— 视频元素属于同一页面，不需要任何截图权限。仅当画布被跨域污染（`SecurityError`）或抓到全黑帧时，才回退 `captureVisibleTab` + 裁剪，并把 `<all_urls>` 放进 `optional_host_permissions` 由用户在设置页按需授予。
+- **附带收益**：抓到的是视频原生分辨率的纯画面，不含弹幕层与播放器 UI，也不受窗口遮挡/最小化影响；视口缩放不再影响清晰度。
+- **已知陷阱**：硬件加速叠加层下 `drawImage` 可能得到全黑帧。必须抽样检测像素均值（阈值 4）并按 `tainted` 回退，否则会把一张黑图送去视觉识别；`getImageData` 同时充当污染检测（污染时抛 `SecurityError`）。
