@@ -113,7 +113,7 @@
       sendResponse({ ok: true, time: v ? v.currentTime || 0 : 0, duration: v ? (v.duration || 0) : 0 });
       return;
     }
-    // AI 总结：暂停→seek 到目标时间→画面稳定后返回视频元素位置（供后台截图裁剪）
+    // 截图总结：暂停→（必要时）seek 到目标时间→画面稳定后返回视频元素位置（供后台截图裁剪）
     if (msg.type === "SEEK_VIDEO") {
       const v = findVideo();
       if (!v || typeof msg.time !== "number" || !isFinite(msg.time)) {
@@ -123,13 +123,17 @@
       const wasPlaying = !v.paused;
       try { v.pause(); } catch (_) { /* ignore */ }
       const dur = v.duration && isFinite(v.duration) ? v.duration : msg.time;
-      v.currentTime = Math.max(0, Math.min(msg.time, dur));
-      const settled = new Promise(resolve => {
+      const target = Math.max(0, Math.min(msg.time, dur));
+      // 目标就是当前帧（截取"当前画面"的常见情形）：写入同值不会触发 seeked，
+      // 会白等 1500ms 超时，因此直接跳过 seek。
+      const needSeek = Math.abs((v.currentTime || 0) - target) > 0.05;
+      const settled = needSeek ? new Promise(resolve => {
         let done = false;
         const fin = () => { if (!done) { done = true; resolve(); } };
         const tm = setTimeout(fin, 1500);
         v.addEventListener("seeked", () => { clearTimeout(tm); fin(); }, { once: true });
-      });
+        v.currentTime = target;
+      }) : Promise.resolve();
       settled.then(() => {
         setTimeout(() => {
           const r = v.getBoundingClientRect();
@@ -140,7 +144,7 @@
             viewHeight: window.innerHeight,
           });
           if (wasPlaying) { try { v.play().catch(() => {}); } catch (_) { /* ignore */ } }
-        }, 350);
+        }, needSeek ? 350 : 120);
       });
       return true; // 异步响应：必须返回 true 保持消息通道，否则 sendResponse 失效
     }

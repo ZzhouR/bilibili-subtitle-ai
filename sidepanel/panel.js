@@ -17,13 +17,16 @@
   const ctxText = $("#ctxText");
   const resizer = $("#subResizer");
   const md = window.MarkdownLib;
-  const summaryView = $("#summaryView");
-  const summaryStatus = $("#summaryStatus");
-  const summaryBar = $("#summaryBar");
-  const summarySegs = $("#summarySegs");
-  const summaryResult = $("#summaryResult");
-  const summaryBtn = $("#summaryBtn");
-  const summaryStopBtn = $("#summaryStopBtn");
+  const shotView = $("#shotView");
+  const shotStatus = $("#shotStatus");
+  const shotList = $("#shotList");
+  const shotBtn = $("#shotBtn");
+  const shotStopBtn = $("#shotStopBtn");
+  const shotClearBtn = $("#shotClearBtn");
+  const shotForm = $("#shotForm");
+  const shotInput = $("#shotInput");
+  const shotSendBtn = $("#shotSendBtn");
+  const shotWithSub = $("#shotWithSub");
 
   let tracks = [];
   let activeIndex = -1;
@@ -170,7 +173,7 @@
     });
   }
   bindTimestampJump(msgList);
-  bindTimestampJump(summaryResult);
+  bindTimestampJump(shotList);
 
   // 点击/双击跳转（单击勾选用于 AI 上下文，双击跳转视频；当前句条单击跳转）
   async function jumpTo(time) {
@@ -233,7 +236,8 @@
   }
 
   // ---------- 消息渲染（Markdown） ----------
-  function addMsg(role, text, tag) {
+  // listEl 可为「字幕对话」或「截图总结」的消息列表，两个视图共用同一套气泡与流式渲染
+  function appendMsg(listEl, role, text, tag) {
     const div = document.createElement("div");
     div.className = "msg " + role;
     if (tag) {
@@ -247,9 +251,31 @@
     if (role === "user" || role === "ai") body.innerHTML = md.mdToHtml(text);
     else body.textContent = text;
     div.appendChild(body);
-    msgList.appendChild(div);
-    msgList.scrollTop = msgList.scrollHeight;
+    listEl.appendChild(div);
+    listEl.scrollTop = listEl.scrollHeight;
     return div;
+  }
+
+  function addMsg(role, text, tag) {
+    return appendMsg(msgList, role, text, tag);
+  }
+
+  // 流式气泡：灰色思考区 + 正文 + 闪烁光标
+  function createStreamBubble(listEl, tag) {
+    const box = appendMsg(listEl, "ai", "", tag);
+    const body = box.querySelector(".body");
+    body.innerHTML = "";
+    const reasoningEl = document.createElement("div");
+    reasoningEl.className = "md-reasoning";
+    reasoningEl.hidden = true;
+    const contentEl = document.createElement("div");
+    contentEl.className = "md-body";
+    const caretEl = document.createElement("span");
+    caretEl.className = "caret";
+    contentEl.appendChild(caretEl);
+    body.appendChild(reasoningEl);
+    body.appendChild(contentEl);
+    return { reasoningEl, contentEl, caretEl };
   }
 
   // ---------- 历史存储 ----------
@@ -281,20 +307,20 @@
   function handleStream(m) {
     const s = aiStreams.get(m.id);
     if (!s) return;
+    const listEl = s.listEl || msgList;
     if (m.error) { finishStream(s, null, "⚠ " + m.error, true); return; }
     if (m.done) { finishStream(s, s.fullText, null, false); return; }
     if (m.reasoning) {
       s.reasoningText += m.reasoning;
       s.reasoningEl.hidden = false;
       s.reasoningEl.textContent = s.reasoningText;
-      msgList.scrollTop = msgList.scrollHeight;
+      listEl.scrollTop = listEl.scrollHeight;
     }
     if (m.delta) {
       s.fullText += m.delta;
       s.contentEl.innerHTML = md.mdToHtml(s.fullText);
-      if (s.contentEl.lastChild && s.contentEl.lastChild.tagName === "DIV") {} // no-op 保持简单
       s.contentEl.appendChild(s.caretEl);
-      msgList.scrollTop = msgList.scrollHeight;
+      listEl.scrollTop = listEl.scrollHeight;
     }
   }
 
@@ -307,13 +333,48 @@
     } else {
       s.contentEl.innerHTML = md.mdToHtml(aiText || s.fullText || "");
     }
-    msgList.scrollTop = msgList.scrollHeight;
-    if (currentRecord) {
+    const listEl = s.listEl || msgList;
+    listEl.scrollTop = listEl.scrollHeight;
+    // 仅「字幕对话」写入历史记录；截图总结用自己的会话线程
+    if (s.record && currentRecord) {
       if (!isErr && s.fullText) currentRecord.messages.push({ role: "ai", content: s.fullText });
       currentRecord.updatedAt = Date.now();
       saveCurrentRecord();
     }
     aiStreams.delete(s.id);
+    if (typeof s.onFinish === "function") s.onFinish(isErr ? null : (aiText || s.fullText || ""), isErr);
+  }
+
+  // 统一发起一次流式对话：返回 Promise（在流结束/失败后 resolve 文本或 null）
+  function startChatStream(opts) {
+    const listEl = opts.listEl || msgList;
+    const id = opts.idPrefix + (++streamSeq);
+    const parts = createStreamBubble(listEl, opts.tag || "AI 思考中…");
+    return new Promise(resolve => {
+      const s = {
+        id, listEl,
+        reasoningEl: parts.reasoningEl, contentEl: parts.contentEl, caretEl: parts.caretEl,
+        reasoningText: "", fullText: "", saved: false,
+        record: !!opts.record,
+        onFinish: (text, isErr) => resolve(isErr ? null : text)
+      };
+      aiStreams.set(id, s);
+      if (typeof opts.onStart === "function") opts.onStart(id);
+      chrome.runtime.sendMessage({ type: "AI_CHAT", id, messages: opts.messages, stream: true })
+        .then(res => {
+          if (res && !res.ok) {
+            const cur = aiStreams.get(id);
+            if (cur) finishStream(cur, null, (res.error || "请求失败"), true);
+          }
+        })
+        .catch(e => {
+          const cur = aiStreams.get(id);
+          if (cur) finishStream(cur, null, (e.message || e), true);
+        })
+        .finally(() => {
+          if (typeof opts.onSettled === "function") opts.onSettled(id);
+        });
+    });
   }
 
   function sendUserMessage(userText) {
@@ -345,220 +406,209 @@
     else if (ctx) addMsg("sys", "已附带字幕上下文");
     addMsg("user", text);
 
-    const id = "s" + (++streamSeq);
-    const body = addMsg("ai", "", "AI 思考中…");
-    body.innerHTML = "";
-    const reasoningEl = document.createElement("div");
-    reasoningEl.className = "md-reasoning";
-    reasoningEl.hidden = true;
-    const contentEl = document.createElement("div");
-    contentEl.className = "md-body";
-    const caretEl = document.createElement("span");
-    caretEl.className = "caret";
-    contentEl.appendChild(caretEl);
-    body.appendChild(reasoningEl);
-    body.appendChild(contentEl);
-    const s = { id, reasoningEl, contentEl, caretEl, reasoningText: "", fullText: "", saved: false };
-    aiStreams.set(id, s);
-
-    currentStreamId = id;
     showStop(true);
-    chrome.runtime.sendMessage({ type: "AI_CHAT", id, messages, stream: true })
-      .then(res => {
-        if (res && !res.ok) {
-          const cur = aiStreams.get(id);
-          if (cur) finishStream(cur, null, (res.error || "请求失败"), true);
-        }
-      })
-      .catch(e => {
-        const cur = aiStreams.get(id);
-        if (cur) finishStream(cur, null, (e.message || e), true);
-      })
-      .finally(() => {
-        if (currentStreamId === id) { currentStreamId = null; showStop(false); }
-      });
+    startChatStream({
+      listEl: msgList, idPrefix: "s", messages, record: true,
+      onStart: id => { currentStreamId = id; },
+      onSettled: id => { if (currentStreamId === id) { currentStreamId = null; showStop(false); } }
+    });
   }
 
   function showStop(show) { stopBtn.hidden = !show; }
 
-  // ---------- AI 总结（画面识别 + 字幕分段 + 结构化汇总） ----------
-  let summaryRunning = false;
-  let summaryCancelled = false;
-  let summaryCards = [];
-  let summaryStarted = false;
-  let summaryStreamId = null; // 汇总流的 id：停止时需要真正 abort 后台请求
+  // ---------- 截图总结（按需截取当前画面 → 视觉识别 → 总结 → 可继续追问） ----------
+  let shotBusy = false;          // 截图/识别/总结进行中
+  let shotCancelled = false;     // 用户中断标志
+  let shotStreamId = null;       // 当前总结/追问流的 id：停止时需要真正 abort 后台请求
+  let shotReady = false;         // 首次进入本标签页时的就绪提示
+  let shotCount = 0;             // 已截图张数
+  // 截图会话线程：截图识别结果与历次问答都留在这里，追问时整体回传，保证多轮上下文
+  const shotThread = [];
+  const SHOT_THREAD_MAX = 24;    // 只保留最近若干轮，避免上下文无限膨胀
+  const SHOT_SUB_WINDOW = 30;    // 附近字幕窗口（秒）
 
-  function buildSegments(lines, segLen) {
-    const segs = [];
-    if (!lines.length) return segs;
-    const end = lines[lines.length - 1].end || 0;
-    for (let t = 0; t < end; t += segLen) {
-      segs.push({ start: t, end: Math.min(t + segLen, end), lines: [] });
-    }
-    if (!segs.length) segs.push({ start: 0, end: end, lines: [] });
-    lines.forEach(l => {
-      const idx = Math.max(0, Math.min(Math.floor(l.start / segLen), segs.length - 1));
-      if (segs[idx]) segs[idx].lines.push(l);
-    });
-    return segs;
+  function setShotStatus(text) {
+    shotStatus.textContent = text;
   }
 
-  function updateSummaryProgress(text, pct) {
-    summaryStatus.textContent = text;
-    if (pct != null) summaryBar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  function pushShotThread(role, content) {
+    shotThread.push({ role, content });
+    if (shotThread.length > SHOT_THREAD_MAX) shotThread.splice(0, shotThread.length - SHOT_THREAD_MAX);
   }
 
-  function renderSegCard(card, idx) {
+  // 截图时刻附近的字幕（±SHOT_SUB_WINDOW 秒），作为画面的语音补充
+  function nearbySubtitles(time) {
+    const lines = currentLines();
+    if (!lines.length || !isFinite(time)) return "";
+    const from = time - SHOT_SUB_WINDOW;
+    const to = time + SHOT_SUB_WINDOW;
+    return lines
+      .filter(l => l.end >= from && l.start <= to)
+      .map(l => "[" + fmt(l.start) + "] " + l.text)
+      .join("\n");
+  }
+
+  // 截图缩略图气泡（点击可跳回该时间点）
+  function addShotImage(image, time) {
     const div = document.createElement("div");
-    div.className = "s-seg";
-    const head = document.createElement("div");
-    head.className = "s-seg-head";
-    head.textContent = "第 " + (idx + 1) + " 段 · " + fmt(card.start) + " – " + fmt(card.end);
-    div.appendChild(head);
-    if (card.image) {
-      const img = document.createElement("img");
-      img.src = card.image;
-      img.alt = "画面截图";
-      div.appendChild(img);
-    }
-    if (card.vision) {
-      const v = document.createElement("div");
-      v.className = "s-vision";
-      v.innerHTML = md.mdToHtml(card.vision);
-      div.appendChild(v);
-    }
-    if (card.subtitle) {
-      const s = document.createElement("div");
-      s.className = "s-sub";
-      s.textContent = card.subtitle;
-      div.appendChild(s);
-    }
+    div.className = "msg user shot-img";
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = "📷 第 " + shotCount + " 张 · " + fmt(time);
+    div.appendChild(tag);
+    const img = document.createElement("img");
+    img.src = image;
+    img.alt = "视频画面截图 " + fmt(time);
+    img.title = "点击跳回 " + fmt(time);
+    img.addEventListener("click", () => jumpTo(time));
+    div.appendChild(img);
+    shotList.appendChild(div);
+    shotList.scrollTop = shotList.scrollHeight;
     return div;
   }
 
-  async function runSummaryChat(contextText) {
-    const id = "sum" + (++streamSeq);
-    summaryStreamId = id;
-    const box = document.createElement("div");
-    box.className = "s-seg";
-    const head = document.createElement("div");
-    head.className = "s-seg-head";
-    head.textContent = "📄 视频 AI 总结";
-    box.appendChild(head);
-    const body = document.createElement("div");
-    body.className = "md-body";
-    const caret = document.createElement("span");
-    caret.className = "caret";
-    body.appendChild(caret);
-    box.appendChild(body);
-    summaryResult.appendChild(box);
-    let fullText = "";
-    const handler = m => {
-      if (!m || m.type !== "AI_STREAM" || m.id !== id) return;
-      if (m.error) { caret.remove(); body.textContent = "⚠ " + m.error; return; }
-      if (m.done) { caret.remove(); body.innerHTML = md.mdToHtml(fullText); return; }
-      if (m.delta) {
-        fullText += m.delta;
-        body.innerHTML = md.mdToHtml(fullText);
-        body.appendChild(caret);
-        summaryResult.scrollTop = summaryResult.scrollHeight;
-      }
-    };
-    chrome.runtime.onMessage.addListener(handler);
-    try {
-      await chrome.runtime.sendMessage({
-        type: "AI_CHAT", id,
-        messages: [{
-          role: "user",
-          content: "你是一名资深课程助教。请基于以下【画面识别结果】与【视频字幕】，生成非常详细的结构化学习总结。要求：\n" +
-            "1. 开头给出视频主题与学习目标；\n" +
-            "2. 按讲授顺序列出【题目原文】【解题思路分析】【分步解答过程】【重点公式】，公式用 $...$ 或 $$...$$ 输出 LaTeX；\n" +
-            "3. 若有画面识别结果，逐题对照板书；若画面识别失败，也基于字幕尽力还原；\n" +
-            "4. 全部使用中文，步骤尽可能详细，可直接用于复习。\n\n" + contextText
-        }],
-        stream: true
-      });
-    } catch (e) {
-      caret.remove();
-      body.textContent = "⚠ " + (e.message || e);
-    } finally {
-      chrome.runtime.onMessage.removeListener(handler);
-      if (summaryStreamId === id) summaryStreamId = null;
-    }
+  function setShotBusy(busy) {
+    shotBusy = busy;
+    shotBtn.disabled = busy;
+    shotSendBtn.disabled = busy;
+    shotStopBtn.hidden = !busy;
   }
 
-  async function startSummary() {
-    if (summaryRunning) return;
+  // 总结指令：与画面识别结果一起作为一条 user 消息进入会话线程，便于后续追问复用
+  const SHOT_SUMMARY_INSTRUCTION =
+    "请基于上面这张视频画面（如附带字幕则结合字幕）生成中文总结，要求：\n" +
+    "1. 一句话说明这一画面在讲什么；\n" +
+    "2. 分点整理画面中的关键信息（题目原文 / 步骤 / 结论 / 注意点）；\n" +
+    "3. 画面中的公式一律用 $...$ 或 $$...$$ 输出 LaTeX，并简述其含义；\n" +
+    "4. 若画面信息不足，明确指出缺什么，不要编造。";
+
+  // 单次截图 → 视觉识别 → 流式总结
+  async function captureAndSummarize() {
+    if (shotBusy) return;
     const tab = await getActiveTab();
-    if (!tab) { updateSummaryProgress("未找到当前标签页", 0); return; }
-    const lines = currentLines();
-    if (!lines.length) { updateSummaryProgress("当前视频无字幕，无法总结", 0); return; }
+    if (!tab) { setShotStatus("未找到当前标签页"); return; }
+    // 与 manifest content_scripts 一致：非视频页时 content 未注入，sendMessage 只会抛"could not establish connection"
+    if (!/^https:\/\/(www\.)?bilibili\.com\/(video\/|list\/)/.test(tab.url || "")) {
+      setShotStatus("当前标签页不是 B 站视频页");
+      appendMsg(shotList, "sys", "请切换到 B 站视频标签页后再截图。");
+      return;
+    }
     const store = await chrome.storage.local.get("aiSettings");
     const settings = store.aiSettings || {};
-    const visionReady = !!settings.visionApiKey;
-    const segLen = Math.max(30, Number($("#segLen").value) || 120);
-    const segs = buildSegments(lines, segLen);
-    summaryRunning = true;
-    summaryCancelled = false;
-    summaryCards = [];
-    summarySegs.innerHTML = "";
-    summaryResult.innerHTML = "";
-    summaryStopBtn.hidden = false;
-    summaryBtn.disabled = true;
-    updateSummaryProgress("开始总结：共 " + segs.length + " 段" + (visionReady ? "（含画面识别）" : "（未配置视觉模型，仅字幕）"), 0);
+    // 截图总结的核心就是画面识别：未配置视觉模型时必须明确报错，而不是静默退化成纯字幕
+    if (!settings.visionApiKey) {
+      setShotStatus("未配置视觉模型，无法识别画面");
+      appendMsg(shotList, "sys", "截图总结需要视觉模型：请在「设置 → 视觉模型」填写 Base URL / API Key / 模型名（如 qwen-vl-plus）。");
+      return;
+    }
+    shotCancelled = false;
+    setShotBusy(true);
     try {
-      for (let i = 0; i < segs.length; i++) {
-        if (summaryCancelled) break;
-        const seg = segs[i];
-        const shotTime = seg.start + (seg.end - seg.start) * 0.15;
-        updateSummaryProgress("分段 " + (i + 1) + "/" + segs.length + "：截取画面…", (i / segs.length) * 100);
-        let image = "";
-        let visionText = "";
-        if (visionReady) {
-          const cap = await chrome.runtime.sendMessage({ type: "CAPTURE_FRAME", tabId: tab.id, time: shotTime });
-          if (summaryCancelled) break;
-          if (cap && cap.ok) {
-            image = cap.image;
-            updateSummaryProgress("分段 " + (i + 1) + "/" + segs.length + "：识别画面…", (i / segs.length) * 100);
-            const v = await chrome.runtime.sendMessage({ type: "AI_VISION", image });
-            visionText = v && v.ok ? v.content : (v && v.error ? "⚠ 识别失败：" + v.error : "");
-          } else if (cap && cap.error) {
-            visionText = "⚠ 截图失败：" + cap.error;
-          }
-        }
-        const card = { start: seg.start, end: seg.end, image, vision: visionText, subtitle: seg.lines.map(l => "[" + fmt(l.start) + "] " + l.text).join("\n") };
-        summaryCards.push(card);
-        summarySegs.appendChild(renderSegCard(card, i));
-        updateSummaryProgress("已处理 " + (i + 1) + "/" + segs.length + " 段", ((i + 1) / segs.length) * 100);
+      setShotStatus("读取播放位置…");
+      let time = 0;
+      try {
+        const pb = await chrome.tabs.sendMessage(tab.id, { type: "GET_PLAYBACK_TIME" });
+        if (pb && isFinite(pb.time)) time = Number(pb.time) || 0;
+      } catch (_) {
+        throw new Error("未连接到视频页，请在 B 站视频页刷新后重试");
       }
-      if (!summaryCancelled) {
-        updateSummaryProgress("正在生成结构化总结（可能耗时 1~3 分钟）…", 100);
-        const parts = summaryCards.map((c, i) =>
-          "【第" + (i + 1) + "段 " + fmt(c.start) + "–" + fmt(c.end) + "】\n" +
-          (c.vision ? "画面识别：" + c.vision + "\n" : "") +
-          "字幕：\n" + c.subtitle
-        ).join("\n\n");
-        await runSummaryChat(parts);
-        updateSummaryProgress("✅ 总结完成", 100);
+      if (shotCancelled) { setShotStatus("已取消"); return; }
+
+      setShotStatus("截取当前画面…");
+      const cap = await chrome.runtime.sendMessage({ type: "CAPTURE_FRAME", tabId: tab.id, time });
+      if (!cap || !cap.ok) throw new Error("截图失败：" + ((cap && cap.error) || "未知原因"));
+      if (shotCancelled) { setShotStatus("已取消"); return; }
+      shotCount++;
+      addShotImage(cap.image, time);
+
+      setShotStatus("视觉模型识别画面…");
+      const v = await chrome.runtime.sendMessage({ type: "AI_VISION", image: cap.image });
+      if (!v || !v.ok) throw new Error("画面识别失败：" + ((v && v.error) || "未知原因"));
+      if (shotCancelled) { setShotStatus("已取消"); return; }
+      const visionText = v.content || "（无有效画面内容）";
+      appendMsg(shotList, "ai", visionText, "👁 画面识别 " + (cap.size || ""));
+
+      const sub = shotWithSub.checked ? nearbySubtitles(time) : "";
+      pushShotThread("user",
+        "【截图 " + shotCount + " · 时间 " + fmt(time) + "】\n画面识别结果：\n" + visionText +
+        (sub ? "\n\n该时刻附近字幕（±" + SHOT_SUB_WINDOW + "s）：\n" + sub : "") +
+        "\n\n" + SHOT_SUMMARY_INSTRUCTION);
+
+      setShotStatus("AI 总结中…" + (sub ? "（已附带附近字幕）" : ""));
+      const text = await startChatStream({
+        listEl: shotList, idPrefix: "shot", messages: shotThread.slice(), tag: "📄 截图总结",
+        onStart: id => { shotStreamId = id; },
+        onSettled: id => { if (shotStreamId === id) shotStreamId = null; }
+      });
+      if (text && !shotCancelled) {
+        pushShotThread("assistant", text);
+        setShotStatus("✅ 总结完成，可直接在下方继续追问，或再截一张");
       } else {
-        updateSummaryProgress("已取消", 0);
+        setShotStatus(shotCancelled ? "已中断" : "总结失败，可重试");
       }
     } catch (e) {
-      updateSummaryProgress("总结失败：" + (e.message || e), 0);
+      const err = (e && e.message) ? e.message : String(e);
+      setShotStatus("⚠ " + err);
+      appendMsg(shotList, "sys", "⚠ " + err);
     } finally {
-      summaryRunning = false;
-      summaryStopBtn.hidden = true;
-      summaryBtn.disabled = false;
+      setShotBusy(false);
     }
   }
 
-  function stopSummary() {
-    summaryCancelled = true;
-    // 汇总请求已经发出时，仅置标志无法停止流；必须让后台 abort
-    if (summaryStreamId) {
-      chrome.runtime.sendMessage({ type: "AI_STOP", id: summaryStreamId }).catch(() => {});
+  // 基于已截取画面继续追问（多轮）
+  async function askShot(question) {
+    if (shotBusy) return;
+    const q = String(question || "").trim();
+    if (!q) return;
+    if (!shotThread.length) {
+      appendMsg(shotList, "sys", "请先点「📷 截图并总结」，再基于画面继续提问");
+      return;
     }
-    updateSummaryProgress("正在取消…");
+    appendMsg(shotList, "user", q);
+    pushShotThread("user", q);
+    shotCancelled = false;
+    setShotBusy(true);
+    setShotStatus("AI 回答中…");
+    try {
+      const text = await startChatStream({
+        listEl: shotList, idPrefix: "shot", messages: shotThread.slice(), tag: "AI 思考中…",
+        onStart: id => { shotStreamId = id; },
+        onSettled: id => { if (shotStreamId === id) shotStreamId = null; }
+      });
+      if (text && !shotCancelled) {
+        pushShotThread("assistant", text);
+        setShotStatus("✅ 已回答，可继续追问");
+      } else {
+        // 失败/中断时把刚追加的提问撤回：否则重试会重复入线程，且线程尾部堆叠连续 user 消息
+        if (shotThread.length && shotThread[shotThread.length - 1].role === "user") shotThread.pop();
+        setShotStatus(shotCancelled ? "已中断" : "回答失败，可重试");
+      }
+    } finally {
+      setShotBusy(false);
+    }
+  }
+
+  function stopShot() {
+    shotCancelled = true;
+    setShotStatus("正在中断…");
+    // 已发出流时仅置标志无效，必须让后台 abort
+    if (!shotStreamId) return; // 还在截图/识别阶段：由各步的 shotCancelled 检查收尾（不能提前解禁按钮，否则会并发再截一次）
+    const id = shotStreamId;
+    chrome.runtime.sendMessage({ type: "AI_STOP", id }).catch(() => {});
+    // 兜底：后台若已失活（SW 被回收）不会再广播 done/error，本地必须自行收尾，
+    // 否则 shotBusy 常驻 true，截图/发送按钮被永久禁用。
+    setTimeout(() => {
+      const cur = aiStreams.get(id);
+      if (cur) finishStream(cur, null, "⚠ 已中断", true);
+    }, 1200);
+  }
+
+  function clearShot() {
+    if (shotBusy) stopShot();
+    shotThread.length = 0;
+    shotCount = 0;
+    shotList.innerHTML = "";
+    setShotStatus("已清空，点「📷 截图并总结」重新开始");
   }
 
   // ---------- 历史载入 ----------
@@ -624,6 +674,11 @@
       lineCount.textContent = "";
       clearTimeout(videoSwitchTimer);
       videoSwitchTimer = setTimeout(loadSubtitles, 4000); // 兜底刷新
+      // 截图会话绑定的是旧视频的画面：换视频后继续追问会张冠李戴，直接重置
+      if (shotThread.length || shotCount) {
+        clearShot();
+        setShotStatus("已切换视频，截图会话已重置");
+      }
     }
     else if (msg.type === "SUBTITLES_READY" || msg.type === "SUBTITLES_ERROR") {
       clearTimeout(videoSwitchTimer);
@@ -681,26 +736,32 @@
     }
   });
 
-  // ---------- Tab 切换（字幕对话 / AI 总结） ----------
+  // ---------- Tab 切换（字幕对话 / 截图总结） ----------
   document.querySelectorAll(".p-tab").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".p-tab").forEach(b => b.classList.toggle("active", b === btn));
       const tab = btn.dataset.tab;
       mainView.hidden = tab !== "chat";
-      summaryView.hidden = tab !== "summary";
-      if (tab === "summary" && !summaryStarted) {
-        summaryStarted = true;
+      shotView.hidden = tab !== "shot";
+      if (tab === "shot" && !shotReady) {
+        shotReady = true;
         chrome.storage.local.get("aiSettings").then(store => {
           const s = store.aiSettings || {};
-          updateSummaryProgress(s.visionApiKey
-            ? "就绪：视觉模型 " + (s.visionModel || "qwen-vl-plus") + "（分段画面将被识别）"
-            : "未配置视觉模型（设置页-视觉模型），总结仅基于字幕", 0);
+          setShotStatus(s.visionApiKey
+            ? "就绪：视觉模型 " + (s.visionModel || "qwen-vl-plus") + "，点「📷 截图并总结」"
+            : "未配置视觉模型（设置页-视觉模型），无法识别画面");
         });
       }
     });
   });
-  summaryBtn.addEventListener("click", startSummary);
-  summaryStopBtn.addEventListener("click", stopSummary);
+  shotBtn.addEventListener("click", captureAndSummarize);
+  shotStopBtn.addEventListener("click", stopShot);
+  shotClearBtn.addEventListener("click", clearShot);
+  shotForm.addEventListener("submit", e => {
+    e.preventDefault();
+    const text = shotInput.value.trim();
+    if (text) { askShot(text); shotInput.value = ""; }
+  });
 
   $("#historyBtn").addEventListener("click", openHistoryWindow);
   $("#newChatBtn").addEventListener("click", () => {

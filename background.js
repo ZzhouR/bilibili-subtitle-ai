@@ -367,7 +367,7 @@ async function handleAiChat(msg) {
   }
 }
 
-// ---------- AI 总结：视频帧采集 + 视觉识别 ----------
+// ---------- 截图总结：视频帧采集 + 视觉识别 ----------
 function bufToBase64(buf) {
   const bytes = new Uint8Array(buf);
   let bin = "";

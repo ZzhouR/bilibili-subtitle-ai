@@ -6,7 +6,7 @@
 
 ```
 ┌────────────────────────── 扩展页面层 ──────────────────────────┐
-│ sidepanel/panel  AI 对话 + 字幕浏览（侧边栏）                    │
+│ sidepanel/panel  AI 对话 + 字幕浏览 + 截图总结（侧边栏）          │
 │ popup 状态显示 + 快捷入口        options  AI 服务设置            │
 └──────────────┬─────────────────────────────────────┬──────────┘
                │ chrome.runtime 消息                  │
@@ -28,9 +28,9 @@
 | `lib/wbi.js` | 纯函数：MD5、wbi 签名（`encWbi`）、字幕解析（`parseTs`/`normalizeBody`） | 无 DOM/Chrome 依赖，可被 SW importScripts 与 node require |
 | `background.js` | 唯一访问网络/密钥的模块；消息路由；缓存（字幕 30min、wbi 密钥 1d、cid 内存缓存） | API Key 永不进入页面上下文 |
 | `content/extractor.js` | 识别视频页 bvid/cid/p（`/video/` 与 `/list/`），请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析并回传）；导航令牌丢弃过期响应；失败自动重试 2 次（3s 间隔） |
-| `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME`；AI 总结 `SEEK_VIDEO`（暂停→seek→返回视频位置） | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI |
+| `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME`；截图总结 `SEEK_VIDEO`（暂停→必要时 seek→返回视频位置） | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI |
 | `lib/latex.js` | 零依赖迷你 LaTeX→HTML 渲染器（希腊字母/分数/根号/上下标/矩阵/符号） | 词边界命令替换 + HTML 转义安全 |
-| `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库） | 唯一的字幕展示位置（视频页不再注入任何 UI） |
+| `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库）、截图总结（按需单帧 + 多轮追问） | 唯一的字幕展示位置（视频页不再注入任何 UI）；两个标签页共用 `startChatStream` 流式渲染 |
 | `history/` | 对话历史管理独立窗口：搜索/查看/重命名/删除/载入侧边栏续聊 | 与侧边栏经 `pendingOpenRecord` + 消息协作 |
 | `options/` | AI 服务配置，存 `chrome.storage.local` 的 `aiSettings` | 支持测试连接（GET /models） |
 | `popup/` | 显示当前视频字幕状态；打开侧边栏/设置 | 依赖 content 的 `GET_CURRENT_SUBTITLES` |
@@ -41,7 +41,7 @@
 |---|---|---|---|
 | content → background | `GET_SUBTITLES` | `{bvid, cid?, p?}` | `{ok, tracks[], fromCache, cid}`（cid 为后台实际使用的 cid）或 `{ok:false, error}` |
 | panel/popup → content | `GET_CURRENT_SUBTITLES` | – | `{ok, tracks[], info}` |
-| panel → content | `SEEK_VIDEO` | `{time}` | `{ok, rect, viewWidth, viewHeight}`（异步，暂停→seek→稳定后返回） |
+| panel → content | `SEEK_VIDEO` | `{time}` | `{ok, rect, viewWidth, viewHeight}`（异步；暂停后：目标≈当前帧则免 seek，否则 seek 并等 `seeked`/1500ms，再等画面稳定） |
 | panel → content | `GET_PLAYBACK_TIME` | – | `{ok, time, duration}` |
 | content → 扩展页 | `PLAYBACK_HIGHLIGHT` | `{indexes:[{trackIndex,index}]}` | –（侧边栏同步高亮/滚动） |
 | content → 扩展页 | `VIDEO_CHANGED` | `{bvid}` | –（侧边栏自动刷新字幕） |
@@ -70,6 +70,13 @@
 1. panel 组装 messages（可含字幕上下文块：`【视频字幕】\n[mm:ss] 文本`）；
 2. `AI_CHAT` → background 读 `aiSettings` → POST `{baseUrl}/chat/completions`（OpenAI 兼容）；
 3. 流式：逐段 `data:` 解析 → `AI_STREAM` 广播 delta；`AI_STOP` 用 AbortController 中断。
+
+## 5b. 截图总结链路（0.10.0）
+
+1. panel 取当前播放位置（`GET_PLAYBACK_TIME`）→ `CAPTURE_FRAME` 截取并裁剪当前画面；
+2. `AI_VISION` 交视觉模型识别（公式输出 LaTeX）；
+3. 把「画面识别结果 +（可选）±30s 附近字幕 + 总结指令」作为一条 user 消息追加进会话线程 `shotThread`，整体经 `AI_CHAT` 流式总结；
+4. 追问/再截图都追加进同一 `shotThread`（上限 24 条），因此多轮上下文连续；详见 `docs/FEATURE-SHOT-SUMMARY.md`。
 
 ## 6. 持久化与缓存
 

@@ -116,6 +116,35 @@ ok("多行 $$ 不丢公式内容", blockMd.includes("x") && blockMd.includes("z"
 ok("单行 $$ 渲染", mdd.mdToHtml("$$a+b$$").includes("latex-block"));
 ok("未闭合 $$ 也渲染（流式输出中）", mdd.mdToHtml("$$\nE=mc^2").includes("latex-block"));
 
+console.log("-- 截图总结逻辑（与 sidepanel/panel.js、content/subtitle-view.js 一致）");
+// needSeek：目标≈当前帧时必须跳过 seek（写入同值不触发 seeked，只能等 1500ms 超时）
+const needSeek = (cur, target) => Math.abs((cur || 0) - target) > 0.05;
+ok("当前帧免 seek", needSeek(123.4, 123.4) === false);
+ok("微小抖动免 seek", needSeek(123.42, 123.4) === false);
+ok("time=0 免 seek", needSeek(0, 0) === false);
+ok("跨帧仍 seek", needSeek(100, 123.4) === true);
+// shotThread：先进先出截断，保留最新 SHOT_THREAD_MAX 条
+const SHOT_THREAD_MAX = 24;
+const thread = [];
+const pushThread = (role, content) => {
+  thread.push({ role, content });
+  if (thread.length > SHOT_THREAD_MAX) thread.splice(0, thread.length - SHOT_THREAD_MAX);
+};
+for (let i = 0; i < 40; i++) pushThread(i % 2 ? "assistant" : "user", "m" + i);
+eq("会话线程上限 24", thread.length, 24);
+eq("保留最新一条", thread[thread.length - 1].content, "m39");
+eq("丢弃最旧", thread[0].content, "m16");
+// nearbySubtitles：截图时刻 ±30s 的字幕（区间相交，含边界）
+const SHOT_SUB_WINDOW = 30;
+const shotLines = [
+  { start: 0, end: 5, text: "a" }, { start: 100, end: 105, text: "b" },
+  { start: 130, end: 140, text: "c" }, { start: 200, end: 210, text: "d" }
+];
+const near = t => shotLines.filter(l => l.end >= t - SHOT_SUB_WINDOW && l.start <= t + SHOT_SUB_WINDOW).map(l => l.text).join(",");
+eq("附近字幕窗口 ±30s", near(120), "b,c");
+eq("边界相交计入", near(135), "b,c");
+eq("窗口外不取", near(400), "");
+
 console.log("-- manifest 资源完整性");
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
 const refs = [];
@@ -128,7 +157,7 @@ const missing = refs.filter(p => !fs.existsSync(path.join(ROOT, p)));
 eq("manifest 引用资源全部存在", missing.length, 0);
 if (missing.length) console.log("    缺失:", missing.join(", "));
 eq("manifest_version=3", manifest.manifest_version, 3);
-eq("版本号为 0.9.3", manifest.version, "0.9.3");
+eq("版本号为 0.10.0", manifest.version, "0.10.0");
 ok("权限含 storage/cookies/sidePanel/activeTab", ["storage", "cookies", "sidePanel", "activeTab"].every(p => manifest.permissions.includes(p)));
 ok("host_permissions 含字幕 CDN hdslb", (manifest.host_permissions || []).includes("https://*.hdslb.com/*"));
 const csMatches = (manifest.content_scripts || []).flatMap(cs => cs.js ? cs.matches : []);
@@ -154,7 +183,7 @@ ok("view.js 支持 /list/ 合集页（0.9.3）", view.includes("/^\\/list\\//"))
 const panel = fs.readFileSync(path.join(ROOT, "sidepanel/panel.js"), "utf8");
 ["GET_CURRENT_SUBTITLES", "AI_STREAM", "AI_STOP", "subResizer", "--subtitle-h", "PLAYBACK_HIGHLIGHT", "VIDEO_CHANGED", "chatHistory", "sendUserMessage", "【视频字幕知识库】", "historyBtn", "openHistoryWindow", "LOAD_HISTORY_TO_PANEL", "pendingOpenRecord", "mdToHtml", "JUMP_TO_TIME", "nowLine", "reasoning"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 ["SUBTITLES_READY", "SUBTITLES_ERROR", "videoSwitchTimer"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
-["startSummary", "CAPTURE_FRAME", "AI_VISION", "summaryView", "buildSegments", "runSummaryChat"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
+["captureAndSummarize", "CAPTURE_FRAME", "AI_VISION", "shotView", "shotThread", "askShot"].forEach(k => ok("panel.js 包含 " + k, panel.includes(k)));
 ok("panel.js 恢复全文自动上下文", panel.includes("已自动附带字幕知识库（当前轨道"));
 ok("panel.js 智能降载已撤销", !panel.includes("buildAutoContext") && !panel.includes("extractKeywords") && !panel.includes("STOP_WORDS"));
 ok("panel.js 时间戳点击保留", panel.includes("ts-link"));
@@ -162,7 +191,20 @@ ok("panel.js 标签页切换监听", panel.includes("chrome.tabs.onActivated") &
 ok("panel.js 实时跟随（无标签缓存）", !panel.includes("activeTabId") && panel.includes("subLoadSeq"));
 ok("panel.js 已移除 SIDEPANEL_STATE 逻辑", !panel.includes("SIDEPANEL_STATE"));
 ok("panel.js 支持 /list/ 合集页（0.9.3）", panel.includes("(video\\/|list\\/)"));
-ok("panel.js 总结停止会中断后台流（0.9.3）", panel.includes("summaryStreamId"));
+ok("panel.js 截图总结停止会中断后台流（0.10.0）", panel.includes("shotStreamId"));
+ok("panel.js 已移除分段间隔总结（0.10.0）", !panel.includes("buildSegments") && !panel.includes("segLen") && !panel.includes("summaryView"));
+ok("panel.js 截图取当前播放位置（0.10.0）", panel.includes("GET_PLAYBACK_TIME"));
+ok("panel.js 截图会话支持多轮追问（0.10.0）", panel.includes("SHOT_THREAD_MAX") && panel.includes("pushShotThread"));
+ok("panel.js 截图总结共用流式渲染（0.10.0）", panel.includes("startChatStream") && panel.includes("createStreamBubble"));
+ok("view.js 当前帧免 seek（0.10.0）", view.includes("needSeek"));
+ok("panel.js 截图前校验视频页（0.10.0）", panel.includes("当前标签页不是 B 站视频页") && panel.includes("请切换到 B 站视频标签页后再截图"));
+ok("panel.js 中断有本地兜底收尾（0.10.0）", panel.includes('finishStream(cur, null, "⚠ 已中断", true)'));
+ok("panel.js 追问失败撤回提问（0.10.0）", panel.includes('shotThread[shotThread.length - 1].role === "user"') && panel.includes("shotThread.pop()"));
+ok("panel.js 切视频重置截图会话（0.10.0）", panel.includes("已切换视频，截图会话已重置"));
+const panelCss = fs.readFileSync(path.join(ROOT, "sidepanel/panel.css"), "utf8");
+ok("panel.css 含截图总结样式且已清理旧样式（0.10.0）",
+  panelCss.includes(".msg.shot-img") && panelCss.includes("#shotView") && panelCss.includes(".p-shot-status")
+  && !panelCss.includes("#summaryView") && !panelCss.includes(".p-seglen"));
 const popupJs = fs.readFileSync(path.join(ROOT, "popup/popup.js"), "utf8");
 ok("popup.js 支持 /list/ 合集页（0.9.3）", popupJs.includes("(video\\/|list\\/)"));
 const historyJs = fs.readFileSync(path.join(ROOT, "history/history.js"), "utf8");
@@ -172,11 +214,13 @@ ok("history.css 存在", fs.existsSync(path.join(ROOT, "history/history.css")));
 
 const panelHtml = fs.readFileSync(path.join(ROOT, "sidepanel/panel.html"), "utf8");
 ok("panel.html 含拖拽分隔条", panelHtml.includes("p-resizer"));
-ok("panel.html 含 AI 总结页与 latex 引入", panelHtml.includes("summaryView") && panelHtml.includes("../lib/latex.js") && panelHtml.includes("p-tab"));
+ok("panel.html 含截图总结页与 latex 引入", panelHtml.includes("shotView") && panelHtml.includes("../lib/latex.js") && panelHtml.includes("p-tab"));
+ok("panel.html 截图总结含追问输入框（0.10.0）", panelHtml.includes("shotForm") && panelHtml.includes("shotInput") && panelHtml.includes("shotBtn"));
+ok("panel.html 已移除分段间隔控件（0.10.0）", !panelHtml.includes("segLen") && !panelHtml.includes("summaryView"));
 const latexJs = fs.readFileSync(path.join(ROOT, "lib/latex.js"), "utf8");
 ["latexToHtml", "GREEK", "lmatrix"].forEach(k => ok("latex.js 包含 " + k, latexJs.includes(k)));
 ok("panel.html 含历史入口按钮且无内嵌历史视图", panelHtml.includes("historyBtn") && !panelHtml.includes("historyView"));
-["ARCHITECTURE.md", "DECISIONS.md", "CHANGELOG.md", "FEATURE-AI-SUMMARY.md"].forEach(k => ok("docs/" + k + " 存在", fs.existsSync(path.join(ROOT, "docs", k))));
+["ARCHITECTURE.md", "DECISIONS.md", "CHANGELOG.md", "FEATURE-AI-SUMMARY.md", "FEATURE-SHOT-SUMMARY.md"].forEach(k => ok("docs/" + k + " 存在", fs.existsSync(path.join(ROOT, "docs", k))));
 ok("CI workflow 存在", fs.existsSync(path.join(ROOT, ".github/workflows/ci.yml")));
 ok("sse.js 存在", fs.existsSync(path.join(ROOT, "lib/sse.js")));
 const optsJs = fs.readFileSync(path.join(ROOT, "options/options.js"), "utf8");

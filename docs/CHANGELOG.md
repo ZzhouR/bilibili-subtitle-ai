@@ -1,5 +1,30 @@
 # 变更日志（CHANGELOG）
 
+## [0.10.0] - 2025（「AI 总结」改为「截图总结」）
+### 变更（破坏性）
+- **「🤖 AI 总结」→「📸 截图总结」**：不再按分段间隔（默认 120s）自动遍历全片截图。改为**完全按需**：点「📷 截图并总结」→ 取当前播放位置 → 截取当前画面 → 视觉模型识别 → 流式生成结构化总结。
+- **移除分段控件与逻辑**：`#segLen` 输入框、`buildSegments()`、逐段循环与进度条（`#summaryBar` / `#summarySegs` / `#summaryResult`）全部删除。
+### 新增
+- **围绕画面多轮追问**：截图总结页内置输入框，截图后可继续提问。会话线程 `shotThread` 保存「画面识别结果 + 历次问答」，每次请求整体回传；上限 24 条（`SHOT_THREAD_MAX`），超出丢弃最旧的。
+- **连续截图**：可在同一会话里连截多张，新画面识别结果追加进同一线程；「清空」重置线程与消息列表。
+- **截图缩略图可跳转**：点击消息列表中的缩略图跳回该截图时刻。
+- **附近字幕开关**（`#shotWithSub`，默认开）：把截图时刻 ±30s 的字幕一起交给 AI，作为画面的语音补充。
+### 修复
+- **当前帧截图白等 1500ms**：`SEEK_VIDEO` 中把 `currentTime` 写成同一个值不会触发 `seeked` 事件，只能等超时。现在目标与当前时间差 ≤0.05s 时跳过 seek，稳定等待也从 350ms 降到 120ms。
+- **未配置视觉模型时的语义**：截图总结的核心就是画面识别，不再静默退化成"仅字幕总结"，而是明确提示去「设置 → 视觉模型」配置。
+- **「停止」可能永久禁用按钮**：后台 SW 被回收时不再广播 `done`/`error`，`shotBusy` 会常驻 true。现在发出 `AI_STOP` 后本地 1.2s 兜底收尾，按钮必然恢复。
+- **非视频页截图报底层错**：截图前先校验标签页 URL（`/video/`、`/list/`），直接提示切换标签页，而不是抛 content 连接失败。
+- **追问失败后上下文脏化**：请求失败/中断时撤回刚追加的提问，避免重试重复入线程、线程尾部堆叠连续 user 消息。
+- **切视频后追问张冠李戴**：收到 `VIDEO_CHANGED` 时重置截图会话（线程 + 消息列表 + 计数）并提示。
+### 重构
+- 抽出 `appendMsg(listEl, …)` / `createStreamBubble()` / `startChatStream()`：「字幕对话」与「截图总结」共用同一套气泡与流式渲染（含 reasoning 灰框、闪烁光标、错误态）；删除截图总结页独立的临时 `onMessage` 监听器与重复的流处理代码。
+- 只有「字幕对话」写入 `chatHistory`（`startChatStream({ record: true })`），截图会话不落历史。
+- 顺手移除 `handleStream()` 中遗留的空 `if` 语句（no-op）。
+### 测试与文档
+- 冒烟断言同步：`captureAndSummarize` / `shotThread` / `askShot` / `shotView` / `SHOT_THREAD_MAX` / `needSeek` 等新标识，并反向断言 `buildSegments` / `segLen` / `summaryView` 已彻底移除。
+- 新增截图总结纯逻辑用例：`needSeek` 判定、`shotThread` 截断（保留最新 24 条）、`nearbySubtitles` ±30s 区间相交；并断言 `panel.css` 已清理旧 `#summaryView` / `.p-seglen` 样式。
+- 新增 `docs/FEATURE-SHOT-SUMMARY.md`；`docs/FEATURE-AI-SUMMARY.md` 标注为 0.10.0 起废弃（底层帧采集链路仍在用）。
+
 ## [0.9.3] - 2025（Bug 审查与修复）
 ### 修复（字幕链路）
 - **请求头伪造无效**：`Cookie`/`Referer`/`User-Agent` 属于 forbidden header，扩展 `fetch` 设置后被浏览器丢弃，等于所有 B 站请求都以"未登录"身份发出。改为统一 `credentials: "include"`（浏览器自动携带 SESSDATA），`chrome.cookies` 仅用于探测登录态并在失败时给出准确提示（见 D7）。

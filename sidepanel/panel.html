@@ -10,7 +10,7 @@
 <header class="p-head">
   <div class="p-tabs">
     <button class="p-tab active" data-tab="chat">💬 字幕对话</button>
-    <button class="p-tab" data-tab="summary">🤖 AI 总结</button>
+    <button class="p-tab" data-tab="shot">📸 截图总结</button>
     <button class="btn small" id="historyBtn">📚 历史</button>
   </div>
   <div class="p-head-row">
@@ -72,20 +72,23 @@
   </section>
 </div>
 
-<div id="summaryView" hidden>
+<div id="shotView" hidden>
   <div class="p-sec-head">
-    <span>🤖 AI 总结（画面 + 字幕）</span>
+    <span>📸 截图总结（视觉模型识别当前画面）</span>
     <span class="p-spacer"></span>
-    <label class="p-seglen">分段
-      <input type="number" id="segLen" value="120" min="30" step="30"> 秒
+    <label class="p-shotopt" title="把截图时刻附近约 ±30 秒的字幕一起交给 AI">
+      <input type="checkbox" id="shotWithSub" checked> 带附近字幕
     </label>
-    <button class="btn small primary" id="summaryBtn">开始总结</button>
-    <button class="btn small" id="summaryStopBtn" hidden>停止</button>
+    <button class="btn small primary" id="shotBtn">📷 截图并总结</button>
+    <button class="btn small" id="shotStopBtn" hidden>停止</button>
+    <button class="btn small" id="shotClearBtn">清空</button>
   </div>
-  <div class="p-summary-status" id="summaryStatus">未开始</div>
-  <div class="p-summary-progress"><div id="summaryBar"></div></div>
-  <div class="p-summary-segs" id="summarySegs"></div>
-  <div class="p-summary-result" id="summaryResult"></div>
+  <div class="p-shot-status" id="shotStatus">点「📷 截图并总结」截取当前画面</div>
+  <div class="p-messages" id="shotList"></div>
+  <form class="p-input" id="shotForm">
+    <textarea id="shotInput" rows="2" placeholder="针对已截取的画面继续追问…（先截图，再提问）"></textarea>
+    <button type="submit" id="shotSendBtn">发送</button>
+  </form>
 </div>
 
 <script src="../lib/latex.js"></script>
