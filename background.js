@@ -2,54 +2,67 @@
 // 职责：字幕接口代理（wbi 签名 + 登录态 + 缓存）、AI 请求代理（流式 + 可中断）、设置持久化
 importScripts("lib/wbi.js", "lib/sse.js");
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
 // ---------- 基础工具 ----------
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// 通过 chrome.cookies 读取 bilibili 域下所有 cookie，组装 Cookie 头
-async function getBiliCookieHeader() {
+// 数值兜底：0 是合法值，不能被 || 吞掉（temperature=0 曾被改写为 0.7）
+function numOr(v, dflt) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : dflt;
+}
+
+// 登录态探测：只读 SESSDATA 判断是否已登录（用于给出明确错误提示）。
+// 注意：Cookie 是 forbidden header，脚本无法通过 fetch headers 设置；
+// 登录态由 credentials:"include" 让浏览器自行携带（host_permissions 已授权 B 站域）。
+async function hasBiliLogin() {
   try {
-    const cookies = await chrome.cookies.getAll({ domain: ".bilibili.com" });
-    if (!cookies || !cookies.length) return null;
-    return cookies.map(c => c.name + "=" + c.value).join("; ");
+    const cookies = await chrome.cookies.getAll({ domain: ".bilibili.com", name: "SESSDATA" });
+    return !!(cookies && cookies.length && cookies[0].value);
   } catch (e) {
     console.warn("[bg] read cookies failed:", e);
-    return null;
+    return false;
   }
 }
 
-// 统一带重试的 fetch（B站接口偶发风控/超时）
+// 致命错误（语义明确，不重试）
+function fatalError(message) {
+  const e = new Error(message);
+  e.fatal = true;
+  return e;
+}
+
+// 统一带重试的 fetch：仅网络错误 / 风控限流 / 5xx 重试（指数退避），4xx 语义错误立即失败。
+// 说明：Cookie / Referer / User-Agent 均为 forbidden header，扩展脚本设置后会被浏览器丢弃，
+// 因此这里不再伪造请求头，登录态一律依赖 credentials:"include"。
 async function fetchWithRetry(url, options = {}, retries = 2) {
   let lastErr;
   for (let i = 0; i <= retries; i++) {
     try {
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent": UA,
-          "Referer": "https://www.bilibili.com/",
-          ...(options.headers || {})
-        },
-        ...options
-      });
+      const res = await fetch(url, { credentials: "include", ...options });
       if (res.status === 412 || res.status === 429) {
-        await sleep(500 * (i + 1));
-        lastErr = new Error("HTTP " + res.status + " 风控/限流，已重试");
+        lastErr = new Error("HTTP " + res.status + "：触发 B 站风控/限流，请稍后重试");
+        if (i < retries) await sleep(600 * Math.pow(2, i));
         continue;
       }
       if (res.status === 401 || res.status === 403) {
-        throw new Error("HTTP " + res.status + "：请检查登录态 / API Key 是否有效");
+        throw fatalError("HTTP " + res.status + "：请检查 B 站登录态 / API Key 是否有效");
       }
       if (res.status === 404) {
-        throw new Error("HTTP 404：接口或资源不存在（B 站接口可能已变动）");
+        throw fatalError("HTTP 404：接口或资源不存在（B 站接口可能已变动）");
+      }
+      if (res.status >= 500) {
+        lastErr = new Error("HTTP " + res.status + "：服务端异常");
+        if (i < retries) await sleep(600 * Math.pow(2, i));
+        continue;
       }
       return res;
     } catch (e) {
+      if (e && e.fatal) throw e;
       lastErr = e;
-      await sleep(400 * (i + 1));
+      if (i < retries) await sleep(500 * Math.pow(2, i));
     }
   }
-  throw lastErr;
+  throw lastErr || new Error("请求失败");
 }
 
 // ---------- 字幕缓存（内存热缓存 + chrome.storage 持久缓存，MV3 SW 重启不丢失） ----------
@@ -93,14 +106,12 @@ async function setCache(bvid, cid, tracks) {
 }
 
 // ---------- wbi 密钥（缓存 1 天） ----------
-async function getWbiKeys(cookieHeader) {
+async function getWbiKeys() {
   const store = await chrome.storage.local.get("wbiKeys");
   if (store.wbiKeys && Date.now() - store.wbiKeys.fetchedAt < 86400000) {
     return { imgKey: store.wbiKeys.imgKey, subKey: store.wbiKeys.subKey };
   }
-  const res = await fetchWithRetry("https://api.bilibili.com/x/web-interface/nav", {
-    headers: { Cookie: cookieHeader || "" }
-  });
+  const res = await fetchWithRetry("https://api.bilibili.com/x/web-interface/nav");
   const json = await res.json();
   const wbi = json && json.data && json.data.wbi_img;
   if (!wbi || !wbi.img_url || !wbi.sub_url) {
@@ -117,13 +128,13 @@ async function getWbiKeys(cookieHeader) {
 // ---------- 视频信息 / 字幕提取 ----------
 const cidCache = new Map(); // bvid:p -> cid（内存缓存）
 // 解析 cid：优先 view 接口的 pages 按分P编号 p 匹配；无 p 用主 cid；再回退 pagelist
-async function resolveCid(bvid, p, cookieHeader) {
+async function resolveCid(bvid, p) {
   const cacheKeyCid = (p ? bvid + ":" + p : bvid);
   const cachedCid = cidCache.get(cacheKeyCid);
   if (cachedCid) return cachedCid;
 
   const url1 = "https://api.bilibili.com/x/web-interface/view?bvid=" + encodeURIComponent(bvid);
-  const res1 = await fetchWithRetry(url1, { headers: { Cookie: cookieHeader || "" } });
+  const res1 = await fetchWithRetry(url1);
   const json1 = await res1.json();
   if (json1.code === 0 && json1.data) {
     let cid = null;
@@ -139,7 +150,7 @@ async function resolveCid(bvid, p, cookieHeader) {
   }
 
   const url2 = "https://api.bilibili.com/x/player/pagelist?bvid=" + encodeURIComponent(bvid);
-  const res2 = await fetchWithRetry(url2, { headers: { Cookie: cookieHeader || "" } });
+  const res2 = await fetchWithRetry(url2);
   const json2 = await res2.json();
   if (json2.code === 0) {
     const idx = p != null ? Number(p) - 1 : 0;
@@ -164,23 +175,27 @@ function pickTracks(json) {
     return 2;
   };
   return tracks
-    .map(t => ({ lan: t.lan, lan_doc: t.lan_doc, subtitle_url: t.subtitle_url }))
+    // 保留 url/label 备用字段：部分响应只带 url，此前被这里过滤掉会导致轨道无法下载
+    .map(t => ({ lan: t.lan, lan_doc: t.lan_doc || t.label || "", subtitle_url: t.subtitle_url || t.url || "" }))
+    .filter(t => !!t.subtitle_url)
     .sort((a, b) => score(a) - score(b));
 }
 
+// 返回 { cid, list }：cid 可能是本函数解析出来的，必须回传给调用方用于缓存与页面同步
 async function fetchSubtitleList(bvid, cid, p) {
-  const cookieHeader = await getBiliCookieHeader();
-  if (!cid) cid = await resolveCid(bvid, p, cookieHeader);
+  if (!cid) cid = await resolveCid(bvid, p);
 
   // 1) 首选：wbi 签名接口
   let lastErr = "";
   try {
-    const keys = await getWbiKeys(cookieHeader);
+    const keys = await getWbiKeys();
     const signed = BiliLib.encWbi({ bvid, cid }, keys.imgKey, keys.subKey);
     const api = "https://api.bilibili.com/x/player/wbi/v2?" + signed;
-    const res = await fetchWithRetry(api, { headers: { Cookie: cookieHeader || "" } });
+    const res = await fetchWithRetry(api);
     const json = await res.json();
-    if (json.code === 0) return pickTracks(json);
+    if (json.code === 0) return { cid, list: pickTracks(json) };
+    // 签名可能因密钥过期失效：清掉缓存的密钥，下次重新获取
+    if (json.code === -403) await chrome.storage.local.remove("wbiKeys");
     lastErr = "wbi/v2 code=" + json.code + " " + (json.message || "");
   } catch (e) {
     lastErr = "wbi/v2 " + (e && e.message ? e.message : String(e));
@@ -189,47 +204,56 @@ async function fetchSubtitleList(bvid, cid, p) {
   // 2) 回退：老接口 x/player/v2（无需签名）
   try {
     const api = "https://api.bilibili.com/x/player/v2?bvid=" + encodeURIComponent(bvid) + "&cid=" + encodeURIComponent(cid);
-    const res = await fetchWithRetry(api, { headers: { Cookie: cookieHeader || "" } });
+    const res = await fetchWithRetry(api);
     const json = await res.json();
-    if (json.code === 0) return pickTracks(json);
+    if (json.code === 0) return { cid, list: pickTracks(json) };
     lastErr += "；v2 code=" + json.code + " " + (json.message || "");
   } catch (e) {
     lastErr += "；v2 " + (e && e.message ? e.message : String(e));
   }
-  throw new Error("字幕列表获取失败：" + lastErr);
+  const loggedIn = await hasBiliLogin();
+  throw new Error("字幕列表获取失败：" + lastErr + (loggedIn ? "" : "（当前浏览器未登录 B 站，部分视频字幕需登录后才可读取）"));
 }
 
-async function fetchSubtitleTrack(track, cookieHeader, bvid) {
+async function fetchSubtitleTrack(track) {
   let url = track.subtitle_url || track.url;
   if (!url) return null;
   if (url.startsWith("//")) url = "https:" + url;
-  const res = await fetchWithRetry(url, {
-    headers: { Cookie: cookieHeader || "", Referer: "https://www.bilibili.com/video/" + (bvid || "") }
-  });
-  if (!res.ok) return null;
-  const json = await res.json();
-  const lines = BiliLib.normalizeBody(json.body);
-  return { lan: track.lan || "", lan_doc: track.lan_doc || track.label || "", url, lines };
+  try {
+    // Referer 同样是 forbidden header，脚本设置会被丢弃：字幕 JSON（hdslb CDN）不校验 Referer，直接请求即可
+    const res = await fetchWithRetry(url);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const lines = BiliLib.normalizeBody(json.body);
+    if (!lines.length) return null;
+    return { lan: track.lan || "", lan_doc: track.lan_doc || track.label || "", url, lines };
+  } catch (e) {
+    console.warn("[bg] fetch track failed:", url, e && e.message);
+    return null; // 单条轨道失败不影响其他轨道
+  }
 }
 
 async function handleGetSubtitles(msg) {
   const { bvid, cid } = msg;
   if (!bvid) return { ok: false, error: "缺少 bvid" };
   const cidNum = cid ? Number(cid) : null;
-  const cacheKeyStr = cidNum ? cacheKey(bvid, cidNum) : null;
 
-  if (cacheKeyStr) {
+  if (cidNum) {
     const cached = await getCache(bvid, cidNum);
-    if (cached) return { ok: true, fromCache: true, tracks: cached, cid: cidNum };
+    if (cached) return { ok: true, fromCache: true, tracks: cached, cid: cidNum, p: msg.p || null };
   }
 
   try {
-    const list = await fetchSubtitleList(bvid, cidNum, msg.p);
-    const cookieHeader = await getBiliCookieHeader();
-    const results = await Promise.all(list.map(t => fetchSubtitleTrack(t, cookieHeader, bvid)));
+    const { cid: realCid, list } = await fetchSubtitleList(bvid, cidNum, msg.p);
+    // cid 由后台解析时也要查一次缓存，避免重复拉取整套字幕
+    if (!cidNum && realCid) {
+      const cached = await getCache(bvid, realCid);
+      if (cached) return { ok: true, fromCache: true, tracks: cached, cid: realCid, p: msg.p || null };
+    }
+    const results = await Promise.all(list.map(t => fetchSubtitleTrack(t)));
     const tracks = results.filter(Boolean);
-    if (cidNum) await setCache(bvid, cidNum, tracks);
-    return { ok: true, fromCache: false, tracks, cid: cidNum, p: msg.p || null };
+    if (realCid) await setCache(bvid, realCid, tracks);
+    return { ok: true, fromCache: false, tracks, cid: realCid || cidNum, p: msg.p || null };
   } catch (e) {
     return { ok: false, error: (e && e.message) ? e.message : String(e) };
   }
@@ -275,9 +299,11 @@ async function handleAiChat(msg) {
       { role: "system", content: settings.systemPrompt || DEFAULT_SETTINGS.systemPrompt },
       ...(msg.messages || [])
     ],
-    temperature: Number(settings.temperature) || 0.7,
+    temperature: numOr(settings.temperature, DEFAULT_SETTINGS.temperature),
     stream: msg.stream !== false
   };
+  // 推理模型（deepseek-reasoner 等）不接受 temperature，带上会被接口拒绝
+  if (useReasoning) delete payload.temperature;
 
   const emit = (data) => {
     if (!streamId) return;
@@ -303,22 +329,31 @@ async function handleAiChat(msg) {
       const content = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
       return { ok: true, content: content || "" };
     }
+    if (!res.body) return { ok: false, error: "AI 接口未返回流式响应体" };
     const reader = res.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
-    while (true) {
+    let finished = false;
+    // [DONE] 必须终止整个读取循环（此前只 break 内层 for，流不会关闭）
+    const consume = (lines) => {
+      for (const line of lines) {
+        const p = SseLib.parseLine(line);
+        if (!p) continue;
+        if (p.done) { finished = true; return; }
+        if (p.reasoning) emit({ reasoning: p.reasoning });
+        if (p.delta) emit({ delta: p.delta });
+      }
+    };
+    while (!finished) {
       const { done, value } = await reader.read();
       if (done) break;
       const r = SseLib.feedBuffer(buffer, decoder.decode(value, { stream: true }));
       buffer = r.buffer;
-      for (const line of r.lines) {
-        const p = SseLib.parseLine(line);
-        if (!p) continue;
-        if (p.done) break;
-        if (p.reasoning) emit({ reasoning: p.reasoning });
-        if (p.delta) emit({ delta: p.delta });
-      }
+      consume(r.lines);
     }
+    // 尾部残留（最后一行可能没有换行符）
+    if (!finished && buffer.trim()) consume([buffer]);
+    if (finished) { try { await reader.cancel(); } catch (_) { /* ignore */ } }
     emit({ done: true });
     return { ok: true, streamed: true };
   } catch (e) {

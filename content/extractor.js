@@ -8,13 +8,23 @@
   window.__BILI_SUBTITLE_AI_EXTRACTOR__ = true;
 
   // 从 URL 与页面全局状态提取 bvid / cid / p（分P编号）
+  // 兼容两种页面（与 manifest 的 content_scripts 匹配项一致）：
+  //   /video/BVxxx           → bvid 在路径里
+  //   /list/xxx?bvid=BVxxx   → 合集/列表播放页，bvid 在 query 里
   function parseVideoInfo() {
+    let params = null;
+    try { params = new URLSearchParams(location.search); } catch (_) { params = null; }
+    let bvid = null;
     const urlMatch = location.pathname.match(/^\/video\/(BV[0-9A-Za-z]+)/);
-    if (!urlMatch) return null;
-    const bvid = urlMatch[1];
+    if (urlMatch) bvid = urlMatch[1];
+    else if (/^\/list\//.test(location.pathname) && params) {
+      const q = params.get("bvid") || "";
+      if (/^BV[0-9A-Za-z]+$/.test(q)) bvid = q;
+    }
+    if (!bvid) return null;
     let p = null;
     try {
-      const pRaw = new URLSearchParams(location.search).get("p");
+      const pRaw = params ? params.get("p") : null;
       if (pRaw && /^\d+$/.test(pRaw)) p = Number(pRaw);
     } catch (_) { /* ignore */ }
 
@@ -44,17 +54,20 @@
   let currentKey = null;      // bvid:p，避免重复请求
   let currentTracks = null;
   let failCount = 0;
+  let reqSeq = 0;             // 导航令牌：旧请求晚于新请求返回时必须丢弃
 
   async function requestSubtitles() {
     const info = parseVideoInfo();
     if (!info) return;
     const key = info.bvid + ":" + (info.p || 0);
     if (key === currentKey && currentTracks && failCount === 0) return;
+    const seq = ++reqSeq;
     currentKey = key;
     currentTracks = null;
     broadcast({ type: "SUB_STATUS", status: "loading", bvid: info.bvid, cid: info.cid, p: info.p });
     try {
       const res = await chrome.runtime.sendMessage({ type: "GET_SUBTITLES", ...info });
+      if (seq !== reqSeq) return; // 已被更新的导航替代，丢弃过期结果
       if (res && res.ok) {
         failCount = 0;
         currentTracks = res.tracks || [];
@@ -76,6 +89,7 @@
         else notifyExt({ type: "SUBTITLES_ERROR", error: errText });
       }
     } catch (e) {
+      if (seq !== reqSeq) return;
       failCount++;
       broadcast({ type: "SUB_STATUS", status: "error", error: e.message || String(e), retry: failCount <= 2 });
       if (failCount <= 2) setTimeout(requestSubtitles, 3000);
@@ -96,6 +110,14 @@
   function onVideoChanged() {
     const info = parseVideoInfo();
     failCount = 0;
+    // 已有同一视频（bvid+p）的字幕：直接重播，不必清空重拉
+    if (info && currentTracks && currentKey === info.bvid + ":" + (info.p || 0)) {
+      broadcast({ type: "SUB_READY", bvid: info.bvid, cid: info.cid, p: info.p, tracks: currentTracks, fromCache: true });
+      notifyExt({ type: "SUBTITLES_READY", bvid: info.bvid, p: info.p, hasTracks: !!currentTracks.length });
+      return;
+    }
+    currentKey = null;
+    currentTracks = null;
     // 页面内事件：subtitle-view 据此清空旧 tracks
     broadcast({ type: "VIDEO_CHANGED", bvid: info ? info.bvid : null, p: info ? info.p : null });
     // 扩展链路：background 转发 → 侧边栏显示“加载中”
@@ -106,9 +128,15 @@
 
   // ---------- SPA URL 变化检测（四通道） ----------
   let lastUrl = location.href;
+  let lastKey = (() => { const i = parseVideoInfo(); return i ? i.bvid + ":" + (i.p || 0) : null; })();
   function checkUrlChange() {
     if (location.href === lastUrl) return;
     lastUrl = location.href;
+    const info = parseVideoInfo();
+    const key = info ? info.bvid + ":" + (info.p || 0) : null;
+    // 仅 bvid/分P 变化才算切换视频：过滤 ?t=/?vd_source= 等无关参数抖动
+    if (key === lastKey) return;
+    lastKey = key;
     onVideoChanged();
   }
 

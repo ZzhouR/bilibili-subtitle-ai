@@ -56,14 +56,22 @@
   }
 
   function parseVideoInfo() {
+    let params = null;
+    try { params = new URLSearchParams(location.search); } catch (_) { params = null; }
+    let bvid = null;
     const urlMatch = location.pathname.match(/^\/video\/(BV[0-9A-Za-z]+)/);
-    if (!urlMatch) return null;
+    if (urlMatch) bvid = urlMatch[1];
+    else if (/^\/list\//.test(location.pathname) && params) {
+      const q = params.get("bvid") || "";
+      if (/^BV[0-9A-Za-z]+$/.test(q)) bvid = q;
+    }
+    if (!bvid) return null;
     let cid = null;
     try {
       const st = window.__INITIAL_STATE__;
       if (st && st.videoData && st.videoData.cid) cid = st.videoData.cid;
     } catch (_) { /* ignore */ }
-    return { bvid: urlMatch[1], cid };
+    return { bvid, cid };
   }
 
   // 接收 extractor 的字幕数据
@@ -134,7 +142,7 @@
           if (wasPlaying) { try { v.play().catch(() => {}); } catch (_) { /* ignore */ } }
         }, 350);
       });
-      return; // 异步响应
+      return true; // 异步响应：必须返回 true 保持消息通道，否则 sendResponse 失效
     }
   });
 

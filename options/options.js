@@ -35,35 +35,49 @@
   }
 
   function read() {
+    const tempRaw = Number($("#temperature").value);
+    const temperature = Number.isFinite(tempRaw) ? Math.min(2, Math.max(0, tempRaw)) : DEFAULT.temperature;
     return {
       baseUrl: $("#baseUrl").value.trim() || DEFAULT.baseUrl,
       apiKey: $("#apiKey").value.trim(),
       model: $("#model").value.trim() || DEFAULT.model,
       reasoningLevel: Number($("#reasoningLevel").value) === 1 ? 1 : 0,
-      visionBaseUrl: $("#visionBaseUrl").value.trim() || "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      visionBaseUrl: $("#visionBaseUrl").value.trim() || DEFAULT.visionBaseUrl,
       visionApiKey: $("#visionApiKey").value.trim(),
-      visionModel: $("#visionModel").value.trim() || "qwen-vl-plus",
-      temperature: Math.min(2, Math.max(0, Number($("#temperature").value) || 0.7)),
+      visionModel: $("#visionModel").value.trim() || DEFAULT.visionModel,
+      temperature, // 0 是合法值，不能被 || 兜底吞掉
       systemPrompt: $("#systemPrompt").value.trim() || DEFAULT.systemPrompt
     };
   }
 
+  // 保存时保留本页未呈现的既有字段（如 reasoningModel），避免整体覆盖丢配置
+  async function save() {
+    const store = await chrome.storage.local.get("aiSettings");
+    const merged = Object.assign({}, store.aiSettings || {}, read());
+    await chrome.storage.local.set({ aiSettings: merged });
+  }
+
   $("#saveBtn").addEventListener("click", async () => {
-    await chrome.storage.local.set({ aiSettings: read() });
+    await save();
     setStatus("✅ 设置已保存", "ok");
     setTimeout(() => setStatus(""), 2500);
   });
 
   $("#testBtn").addEventListener("click", async () => {
-    await chrome.storage.local.set({ aiSettings: read() });
+    await save();
     setStatus("正在测试连接…");
-    const res = await chrome.runtime.sendMessage({ type: "AI_TEST" });
-    if (res && res.ok) {
-      const models = (res.models || []).slice(0, 12);
-      setStatus("✅ 连接成功，可用模型：" + models.join("、") + (res.models.length > 12 ? "…" : ""), "ok");
-      $("#modelList").textContent = "共发现 " + res.models.length + " 个模型";
-    } else {
-      setStatus("❌ 连接失败：" + (res && res.error ? res.error : "未知错误"), "err");
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "AI_TEST" });
+      if (res && res.ok) {
+        const all = Array.isArray(res.models) ? res.models : [];
+        const models = all.slice(0, 12);
+        setStatus("✅ 连接成功" + (models.length ? "，可用模型：" + models.join("、") + (all.length > 12 ? "…" : "") : "（接口未返回模型列表）"), "ok");
+        $("#modelList").textContent = all.length ? "共发现 " + all.length + " 个模型" : "";
+      } else {
+        setStatus("❌ 连接失败：" + (res && res.error ? res.error : "未知错误"), "err");
+      }
+    } catch (e) {
+      setStatus("❌ 连接失败：" + ((e && e.message) || e), "err");
     }
   });
 

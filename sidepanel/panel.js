@@ -66,7 +66,8 @@
         subList.innerHTML = '<div class="p-empty">未找到当前标签页</div>';
         return;
       }
-      if (!/^https:\/\/(www\.)?bilibili\.com\/video\//.test(tab.url || "")) {
+      // 与 manifest content_scripts 保持一致：/video/ 与 /list/（合集播放页）都受支持
+      if (!/^https:\/\/(www\.)?bilibili\.com\/(video\/|list\/)/.test(tab.url || "")) {
         if (seq !== subLoadSeq) return;
         setStatus("当前标签页不是 B 站视频页（可切换到视频标签页）");
         trackBar.hidden = true;
@@ -86,7 +87,18 @@
         return;
       }
       tracks = res.tracks || [];
+      const prevKey = info ? info.bvid + ":" + (info.p || 0) : null;
       info = res.info || null;
+      const nextKey = info ? info.bvid + ":" + (info.p || 0) : null;
+      // 换了视频/分P：清掉旧的勾选与上下文，否则索引会错位到新字幕上
+      if (prevKey !== nextKey) {
+        selected.clear();
+        setContext("");
+        nowTrackIndex = -1;
+        nowLineIndex = -1;
+        nowLine.textContent = "";
+        nowLine.dataset.time = "";
+      }
       if (activeIndex < 0 || activeIndex >= tracks.length) activeIndex = 0;
       if (!tracks.length) {
         setStatus("已连接视频页，但该视频暂无字幕", "ok");
@@ -196,8 +208,11 @@
   }
 
   function fmt(s) {
-    s = Math.max(0, s);
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    // 先按 0.1s 量化再拆分，避免 59.96 → "60.0"（分/秒进位错乱）
+    const tenths = Math.round(Math.max(0, Number(s) || 0) * 10);
+    const h = Math.floor(tenths / 36000);
+    const m = Math.floor((tenths % 36000) / 600);
+    const sec = (tenths % 600) / 10;
     const mm = String(m).padStart(2, "0");
     const ss = sec.toFixed(1).padStart(4, "0");
     return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
@@ -371,6 +386,7 @@
   let summaryCancelled = false;
   let summaryCards = [];
   let summaryStarted = false;
+  let summaryStreamId = null; // 汇总流的 id：停止时需要真正 abort 后台请求
 
   function buildSegments(lines, segLen) {
     const segs = [];
@@ -422,6 +438,7 @@
 
   async function runSummaryChat(contextText) {
     const id = "sum" + (++streamSeq);
+    summaryStreamId = id;
     const box = document.createElement("div");
     box.className = "s-seg";
     const head = document.createElement("div");
@@ -466,6 +483,7 @@
       body.textContent = "⚠ " + (e.message || e);
     } finally {
       chrome.runtime.onMessage.removeListener(handler);
+      if (summaryStreamId === id) summaryStreamId = null;
     }
   }
 
@@ -536,6 +554,10 @@
 
   function stopSummary() {
     summaryCancelled = true;
+    // 汇总请求已经发出时，仅置标志无法停止流；必须让后台 abort
+    if (summaryStreamId) {
+      chrome.runtime.sendMessage({ type: "AI_STOP", id: summaryStreamId }).catch(() => {});
+    }
     updateSummaryProgress("正在取消…");
   }
 
@@ -590,6 +612,13 @@
     else if (msg.type === "VIDEO_CHANGED") {
       selected.clear();
       setContext("");
+      tracks = [];
+      activeIndex = -1;
+      nowTrackIndex = -1;
+      nowLineIndex = -1;
+      nowLine.textContent = "";
+      nowLine.dataset.time = "";
+      trackBar.hidden = true;
       setStatus("检测到视频切换，正在加载新字幕…");
       subList.innerHTML = '<div class="p-empty">视频切换中，字幕加载…</div>';
       lineCount.textContent = "";
@@ -720,5 +749,6 @@
   });
 
   // 初始加载 + 历史待载入检查
-  loadSubtitles().then(() => { if (info) checkPendingOpenRecord(); });
+  // 待载入的历史对话与当前是否在视频页无关：不能因为 info 为空就丢弃（会一直留在 storage 里打不开）
+  loadSubtitles().finally(() => { checkPendingOpenRecord(); });
 })();

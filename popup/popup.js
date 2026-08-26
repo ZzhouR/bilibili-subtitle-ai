@@ -11,7 +11,8 @@
   async function init() {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tab = tabs && tabs[0];
-    const isVideo = tab && /^https:\/\/(www\.)?bilibili\.com\/video\//.test(tab.url || "");
+    // 与 manifest content_scripts 一致：/video/ 与 /list/（合集播放页）
+    const isVideo = tab && /^https:\/\/(www\.)?bilibili\.com\/(video\/|list\/)/.test(tab.url || "");
     if (!isVideo) {
       statusEl.textContent = "当前页面不是 B 站视频页";
       statusEl.className = "status";

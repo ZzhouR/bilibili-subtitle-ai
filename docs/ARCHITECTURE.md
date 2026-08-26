@@ -13,10 +13,10 @@
 ┌──────────────▼──────────┐            ┌─────────────▼──────────┐
 │ background (SW)          │            │ content scripts        │
 │ · 字幕接口代理(wbi 签名)  │            │ · extractor 识别视频    │
-│ · AI 请求代理(流式)       │            │ · subtitle-view 浮动面板│
-│ · 设置/密钥/缓存          │            │   （同步滚动/高亮/跳转）│
+│ · AI 请求代理(流式)       │            │ · subtitle-view 播放同步│
+│ · 设置/密钥/缓存          │            │   （高亮/跳转/截图定位）│
 └──────────────┬──────────┘            └─────────────┬──────────┘
-               │ fetch(+Cookie)                      │ DOM/CustomEvent
+               │ fetch(credentials)                  │ DOM/CustomEvent
                ▼                                     ▼
         api.bilibili.com / DeepSeek          页面窗口（video 元素等）
 ```
@@ -27,10 +27,10 @@
 |---|---|---|
 | `lib/wbi.js` | 纯函数：MD5、wbi 签名（`encWbi`）、字幕解析（`parseTs`/`normalizeBody`） | 无 DOM/Chrome 依赖，可被 SW importScripts 与 node require |
 | `background.js` | 唯一访问网络/密钥的模块；消息路由；缓存（字幕 30min、wbi 密钥 1d、cid 内存缓存） | API Key 永不进入页面上下文 |
-| `content/extractor.js` | 识别视频页 bvid/cid，请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析）；失败自动重试 2 次（3s 间隔） |
+| `content/extractor.js` | 识别视频页 bvid/cid/p（`/video/` 与 `/list/`），请求字幕并广播 `SUB_READY` | cid 允许为空（由后台解析并回传）；导航令牌丢弃过期响应；失败自动重试 2 次（3s 间隔） |
 | `content/subtitle-view.js` | 播放同步服务（无 UI）：监听 video、为各轨道计算当前行、广播 `PLAYBACK_HIGHLIGHT`、响应 `JUMP_TO_TIME`；AI 总结 `SEEK_VIDEO`（暂停→seek→返回视频位置） | 依赖 `SUB_READY` 广播；不再包含任何浮动面板 UI |
 | `lib/latex.js` | 零依赖迷你 LaTeX→HTML 渲染器（希腊字母/分数/根号/上下标/矩阵/符号） | 词边界命令替换 + HTML 转义安全 |
-| `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库） | 与浮动面板互斥显示（并入机制） |
+| `sidepanel/` | 字幕浏览（勾选行/全选）、上下文组装、AI 对话（流式 + 停止、自动知识库） | 唯一的字幕展示位置（视频页不再注入任何 UI） |
 | `history/` | 对话历史管理独立窗口：搜索/查看/重命名/删除/载入侧边栏续聊 | 与侧边栏经 `pendingOpenRecord` + 消息协作 |
 | `options/` | AI 服务配置，存 `chrome.storage.local` 的 `aiSettings` | 支持测试连接（GET /models） |
 | `popup/` | 显示当前视频字幕状态；打开侧边栏/设置 | 依赖 content 的 `GET_CURRENT_SUBTITLES` |
@@ -39,11 +39,11 @@
 
 | 方向 | type | 载荷 | 响应 |
 |---|---|---|---|
-| content → background | `GET_SUBTITLES` | `{bvid, cid?}` | `{ok, tracks[], fromCache, cid?}` 或 `{ok:false, error}` |
-| panel/popup → content | `GET_CURRENT_SUBTITLES` | – | `{ok, tracks[], activeIndex, info}` |
-| panel/popup → content | `SET_ACTIVE_TRACK` | `{index}` | `{ok}` |
-| panel → content | `SIDEPANEL_STATE` | `{open}` | `{ok}`（浮动面板隐藏/恢复） |
-| content → 扩展页 | `PLAYBACK_HIGHLIGHT` | `{trackIndex, index}` | –（侧边栏同步高亮/滚动） |
+| content → background | `GET_SUBTITLES` | `{bvid, cid?, p?}` | `{ok, tracks[], fromCache, cid}`（cid 为后台实际使用的 cid）或 `{ok:false, error}` |
+| panel/popup → content | `GET_CURRENT_SUBTITLES` | – | `{ok, tracks[], info}` |
+| panel → content | `SEEK_VIDEO` | `{time}` | `{ok, rect, viewWidth, viewHeight}`（异步，暂停→seek→稳定后返回） |
+| panel → content | `GET_PLAYBACK_TIME` | – | `{ok, time, duration}` |
+| content → 扩展页 | `PLAYBACK_HIGHLIGHT` | `{indexes:[{trackIndex,index}]}` | –（侧边栏同步高亮/滚动） |
 | content → 扩展页 | `VIDEO_CHANGED` | `{bvid}` | –（侧边栏自动刷新字幕） |
 | history 窗口 → 侧边栏 | `LOAD_HISTORY_TO_PANEL` | `{id}` | –（侧边栏载入该历史对话） |
 | content → background → 扩展页 | `SUBTITLES_READY` | `{bvid}` | –（新字幕就绪，侧边栏拉取最新字幕） |
@@ -58,12 +58,12 @@
 
 ## 4. 字幕提取链路
 
-1. `extractor` 从 URL 解析 bvid（SPA 切换时 MutationObserver 重触发）；
-2. 发 `GET_SUBTITLES`（cid 可为空）；
-3. `background`：无 cid → `x/web-interface/view` 解析（失败再试 `x/player/pagelist`）；读取 Cookie（SESSDATA 等）；
-4. 字幕列表：**优先 `x/player/wbi/v2` + wbi 签名**；失败回退 `x/player/v2`；
-5. 并行拉取各轨道 JSON → `normalizeBody` 归一化 → 缓存 → 返回；
-6. `extractor` 广播 `SUB_READY` → `subtitle-view` 渲染轨道/行。
+1. `extractor` 从 URL 解析 bvid（`/video/BVxxx` 或 `/list/...?bvid=BVxxx`；SPA 切换时四通道重触发，仅 bvid/分P 变化才算切换）；
+2. 发 `GET_SUBTITLES`（cid 可为空），并用递增 `reqSeq` 丢弃过期响应；
+3. `background`：无 cid → `x/web-interface/view` 解析（失败再试 `x/player/pagelist`），解析出的 cid 随响应回传；登录态由 `credentials:"include"` 自动携带（见 D7）；
+4. 字幕列表：**优先 `x/player/wbi/v2` + wbi 签名**（code=-403 时清除缓存密钥）；失败回退 `x/player/v2`；
+5. 并行拉取各轨道 JSON → `normalizeBody` 归一化（排序 + 补齐异常 `end`）→ 按 bvid:cid 缓存 → 返回；
+6. `extractor` 广播 `SUB_READY` → `subtitle-view` 计算高亮，侧边栏渲染轨道/行。
 
 ## 5. AI 对话链路
 
@@ -77,9 +77,8 @@
 |---|---|---|---|
 | `aiSettings` | chrome.storage.local | 永久 | AI 服务配置 |
 | `wbiKeys` | chrome.storage.local | 1 天 | wbi 签名密钥 |
-| 字幕缓存 | SW 内存 Map | 30 分钟 | 同视频重复请求 |
-| cid 缓存 | SW 内存 Map | 会话 | bvid→cid |
-| `bili-subtitle-ai-panel-split` | localStorage（视频页） | 永久 | 面板轨道选择 |
+| 字幕缓存 | SW 内存 Map + `chrome.storage.local.subtitleCache` | 30 分钟（上限 8 条 LRU） | 同视频重复请求 |
+| cid 缓存 | SW 内存 Map | 会话 | bvid[:p]→cid |
 | `bili-subtitle-ai-panel-split` | localStorage（侧边栏） | 永久 | 上下区域比例 |
 | `chatHistory` | chrome.storage.local | 永久（上限 100 条） | 对话历史（不含字幕知识库正文，按 bvid 关联） |
 | `pendingOpenRecord` | chrome.storage.local | 一次性 | 历史窗口请求侧边栏载入的对话 id |

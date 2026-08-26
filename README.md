@@ -2,7 +2,7 @@
 
 > 一个让 B 站视频 **看得懂、聊得来、留得下** 的浏览器扩展：自动提取视频字幕，随播放同步滚动高亮，并基于字幕与 AI 对话（总结 / 要点 / 翻译 / 自由提问）。
 
-[![version](https://img.shields.io/badge/version-v0.7.1-blue)](https://github.com/) [![manifest](https://img.shields.io/badge/Manifest%20V3-Chrome%20%26%20Edge-brightgreen)](https://developer.chrome.com/docs/extensions) [![tests](https://img.shields.io/badge/tests-99%20passed-green)](test/smoke-test.js) [![license](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
+[![version](https://img.shields.io/badge/version-v0.9.3-blue)](https://github.com/) [![manifest](https://img.shields.io/badge/Manifest%20V3-Chrome%20%26%20Edge-brightgreen)](https://developer.chrome.com/docs/extensions) [![tests](https://img.shields.io/badge/tests-smoke%20suite-green)](test/smoke-test.js) [![license](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
 ---
 
@@ -60,9 +60,9 @@ git clone https://github.com/<你的用户名>/bilibili-subtitle-ai.git
 
 - **Manifest V3**，零运行时依赖、零构建（纯原生 JavaScript，加载即用）
 - **B 站字幕接口**：`x/player/wbi/v2` 带 **wbi 签名**（自实现 MD5 + mixinKey），失败自动回退 `x/player/v2`；`x/web-interface/view` 按 `?p=` 解析分P cid
-- **登录态**：经 `chrome.cookies` 读取 B 站 Cookie，字幕请求携带 SESSDATA
+- **登录态**：字幕请求统一 `credentials: "include"`，由浏览器携带 SESSDATA（`Cookie` 头无法由扩展脚本设置）；`chrome.cookies` 仅用于探测是否已登录
 - **AI 请求全部经 Service Worker**：API Key 永不出现在页面上下文；流式 SSE 转发 + AbortController 中断
-- **稳定回归**：`test/smoke-test.js` 99 项断言（MD5/wbi 签名与 Node crypto 交叉验证、Markdown XSS 防护、资源完整性、消息链路存在性）
+- **稳定回归**：`test/smoke-test.js`（MD5/wbi 签名与 Node crypto 交叉验证、字幕归一化容错、Markdown/LaTeX 渲染与 XSS 防护、资源完整性、消息链路存在性）
 
 ## 📁 目录结构
 
@@ -75,13 +75,15 @@ bilibili-subtitle-ai/
 │   └── subtitle-view.js     # 播放同步服务（无 UI）：高亮广播、跳转响应
 ├── lib/
 │   ├── wbi.js               # MD5 / wbi 签名 / 字幕解析（纯函数，可单测）
+│   ├── sse.js               # SSE 流解析纯函数（feedBuffer / parseLine）
+│   ├── latex.js             # 零依赖迷你 LaTeX→HTML 渲染
 │   └── markdown.js          # 零依赖 Markdown 渲染（XSS 转义 + 链接白名单）
 ├── sidepanel/               # AI 对话 + 字幕侧边栏
 ├── history/                 # 对话历史管理独立窗口
 ├── options/                 # AI 服务设置（Base URL / Key / 模型 / 思考等级）
 ├── popup/                   # 工具栏弹窗
 ├── assets/                  # 图标 16/48/128
-├── test/smoke-test.js       # 冒烟测试（99 项）
+├── test/smoke-test.js       # 冒烟测试
 ├── docs/                    # ARCHITECTURE / DECISIONS / CHANGELOG / screenshots
 └── PLAN.md                  # 开发计划
 ```
@@ -90,16 +92,16 @@ bilibili-subtitle-ai/
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) —— 架构说明与消息协议契约
 - [docs/DECISIONS.md](docs/DECISIONS.md) —— 技术决策记录（ADR）与已知陷阱
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) —— 变更日志（0.1.0 → 0.7.1）
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) —— 变更日志（0.1.0 → 0.9.3）
 - [PLAN.md](PLAN.md) —— 开发计划
 
 ## 🧪 开发与测试
 
 ```bash
 # 语法检查全部模块
-for f in background.js lib/wbi.js lib/markdown.js content/*.js sidepanel/panel.js history/history.js options/options.js popup/popup.js; do node --check $f; done
+for f in background.js lib/wbi.js lib/markdown.js lib/latex.js lib/sse.js content/*.js sidepanel/panel.js history/history.js options/options.js popup/popup.js; do node --check $f; done
 
-# 冒烟测试（99 项）
+# 冒烟测试
 node test/smoke-test.js
 ```
 
@@ -109,7 +111,7 @@ node test/smoke-test.js
 
 ```bash
 cd ..
-zip -r bilibili-subtitle-ai-v0.7.1.zip bilibili-subtitle-ai -x "*/test/*" "*/docs/screenshots/*"
+zip -r bilibili-subtitle-ai-v0.9.3.zip bilibili-subtitle-ai -x "*/test/*" "*/docs/screenshots/*"
 ```
 
 ## 📋 Manifest 权限说明
@@ -143,7 +145,7 @@ zip -r bilibili-subtitle-ai-v0.7.1.zip bilibili-subtitle-ai -x "*/test/*" "*/doc
 A：该视频本身没有 CC / AI 字幕轨道，扩展无能为力（面板会明确提示）。
 
 **Q：切换分P / 推荐后字幕没变？**
-A：确认扩展已刷新（v0.7.1+）。如仍异常，请打开侧边栏观察状态栏文字，并在 Issues 中反馈操作路径。
+A：确认扩展已刷新（v0.9.3+）。如仍异常，请打开侧边栏观察状态栏文字，并在 Issues 中反馈操作路径。
 
 **Q：可以用其他 AI 服务吗？**
 A：可以。任何 OpenAI 兼容端点（OpenAI、通义、Kimi、智谱、本地 Ollama 等）均可在设置页配置。

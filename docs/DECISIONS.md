@@ -21,10 +21,19 @@
 - **决策**：API Key 只存 chrome.storage.local，请求只由 SW 发出（含流式 SSE 转发、AbortController 中断）。
 - **理由**：Key 不进入页面上下文；规避 CORS；页面被注入的脚本无法窃取。
 
-## D5：侧边栏打开时"并入"浮动面板（心跳机制）
+## D5：侧边栏打开时"并入"浮动面板（心跳机制）— 已废弃（0.7.0 起）
 - **背景**：视频页浮动字幕面板与侧边栏字幕列表功能重复，用户要求打开侧边栏后并入右侧。
-- **决策**：panel 打开时向 content 发 `SIDEPANEL_STATE{open:true}` 隐藏浮动面板；30s 心跳保活；content 侧 150s 无心跳自动恢复。
-- **理由**：Chrome Side Panel 关闭时无可靠回调，心跳+超时是简单可靠的兜底。
+- **当时决策**：panel 打开时向 content 发 `SIDEPANEL_STATE{open:true}` 隐藏浮动面板；30s 心跳保活；content 侧 150s 无心跳自动恢复。
+- **现状**：0.7.0 移除浮动面板 UI 后，`SIDEPANEL_STATE` / `SET_ACTIVE_TRACK` 消息与心跳逻辑一并删除（回归测试断言其不存在）。字幕展示只在侧边栏，content 只保留播放同步服务。保留本条仅作历史记录，勿再实现。
+
+## D7：不伪造请求头，登录态走 credentials
+- **背景**：早期实现用 `chrome.cookies.getAll` 拼 `Cookie` 头传给 `fetch`。`Cookie`/`Referer`/`User-Agent` 都属于 forbidden header name，扩展脚本设置后会被浏览器静默丢弃——既没起作用，还掩盖了"未登录"这类真实失败原因。
+- **决策**：所有 B 站请求统一 `credentials: "include"`（host_permissions 已授权 B 站与 hdslb 域，浏览器自动带上 SESSDATA）；`chrome.cookies` 只用于探测是否登录，以便在失败时给出准确提示。
+- **代价**：仍需保留 `cookies` 权限（仅做登录态探测）。
+
+## D8：错误分级重试
+- **决策**：`fetchWithRetry` 只对网络错误 / 412·429 风控 / 5xx 重试（指数退避 0.6s→1.2s→2.4s）；401/403/404 立即失败并给出语义化提示（内部用 `err.fatal` 标记穿透 catch）。
+- **理由**：此前 401/403/404 抛出的错误被外层 catch 接住后照旧重试，既慢又掩盖原因。
 
 ## D6：面板布局变量化
 - **决策**：字幕区高度用 CSS 变量 `--subtitle-h`，分隔条拖拽修改并持久化到 localStorage。
